@@ -12,7 +12,14 @@
     "compile": "hardhat compile",
     "deploy:local": "hardhat run scripts/deploy.js --network localhost",
     "deploy:sepolia": "hardhat run scripts/deploy.js --network sepolia",
-    "deploy:mainnet": "hardhat run scripts/deploy.js --network mainnet"
+    "deploy:goerli": "hardhat run scripts/deploy.js --network goerli",
+    "deploy:mainnet": "hardhat run scripts/deploy.js --network mainnet",
+    "verify:sepolia": "hardhat verify --network sepolia <CONTRACT_ADDRESS>",
+    "verify:goerli": "hardhat verify --network goerli <CONTRACT_ADDRESS>",
+    "verify:mainnet": "hardhat verify --network mainnet <CONTRACT_ADDRESS>",
+    "verify:sepolia:token": "hardhat verify --network sepolia 0x775F4A912a09291Ae31422b149E0c37760C7AB02 \"Governance Token\" \"GVTOKEN\" 1000000000000000000000000 10000000000000000000000000",
+    "verify:sepolia:voting": "hardhat verify --network sepolia 0xDE789a8e092004e196ac4A88Cd39d5aB8852402c 0x775F4A912a09291Ae31422b149E0c37760C7AB02 1000000000000000000000 100000000000000000000000",
+    "mint:sepolia": "hardhat run scripts/mint-tokens.js --network sepolia"
   },
   "keywords": [
     "ethereum",
@@ -26,7 +33,9 @@
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
+    "@ethersproject/providers": "^5.8.0",
     "@nomicfoundation/hardhat-toolbox": "^5.0.0",
+    "@openzeppelin/contracts": "^5.2.0",
     "@tanstack/react-query": "^4.29.25",
     "dotenv": "^16.4.7",
     "ethers": "^6.10.0",
@@ -35,6 +44,7 @@
     "next": "^14.0.4",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
+    "react-hot-toast": "^2.5.2",
     "viem": "^1.10.14",
     "wagmi": "^1.4.1"
   },
@@ -51,3 +61,4 @@
     "typescript": "^5.2.2"
   }
 }
+

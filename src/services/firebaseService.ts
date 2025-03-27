@@ -2,10 +2,9 @@ import {
   createUserWithEmailAndPassword,
   signInWithEmailAndPassword,
   signOut,
-  UserCredential,
-  updateProfile,
   onAuthStateChanged,
-  User,
+  updateProfile,
+  User as FirebaseUser
 } from 'firebase/auth';
 import {
   collection,
@@ -19,165 +18,236 @@ import {
   setDoc,
   serverTimestamp,
   Timestamp,
+  orderBy,
+  deleteDoc,
+  arrayUnion,
 } from 'firebase/firestore';
 import { auth, db } from '@/lib/firebase';
+import { ProposalData } from '@/lib/contractConfig';
 
-// User Interface
-export interface UserData {
-  uid: string;
-  email: string;
-  displayName: string;
-  walletAddress?: string;
-  createdAt: Date | Timestamp;
-}
-
-// Proposal Metadata Interface
-export interface ProposalMetadata {
-  id: string;
-  proposalId: number; // ID on blockchain
-  createdBy: string; // User UID
-  creatorEmail: string;
-  walletAddress: string;
-  createdAt: Date | Timestamp;
-  additionalInfo?: string;
-  category?: string;
-  tags?: string[];
-}
-
-// Register a new user
-export const registerUser = async (
-  email: string,
-  password: string,
-  displayName: string
-): Promise<UserCredential> => {
+// Firebase auth functions
+export const registerUser = async (email: string, password: string, displayName: string) => {
   try {
-    const userCredential = await createUserWithEmailAndPassword(
-      auth,
-      email,
-      password
-    );
-    
+    const userCredential = await createUserWithEmailAndPassword(auth, email, password);
     // Update user profile with display name
-    if (userCredential.user) {
-      await updateProfile(userCredential.user, { displayName });
-      
-      // Store additional user info in Firestore
-      await setDoc(doc(db, 'users', userCredential.user.uid), {
-        uid: userCredential.user.uid,
-        email,
-        displayName,
-        createdAt: serverTimestamp(),
-      });
-    }
+    await updateProfile(userCredential.user, { displayName });
     
-    return userCredential;
+    // Save additional user data to Firestore
+    await saveUserProfile(email.toLowerCase(), {
+      displayName,
+      email,
+      createdAt: serverTimestamp(),
+      walletAddresses: []
+    });
+    
+    return userCredential.user;
   } catch (error) {
     console.error('Error registering user:', error);
     throw error;
   }
 };
 
-// Sign in a user
-export const signInUser = async (
-  email: string,
-  password: string
-): Promise<UserCredential> => {
+export const loginUser = async (email: string, password: string) => {
   try {
-    return await signInWithEmailAndPassword(auth, email, password);
+    const userCredential = await signInWithEmailAndPassword(auth, email, password);
+    return userCredential.user;
   } catch (error) {
-    console.error('Error signing in user:', error);
+    console.error('Error logging in:', error);
     throw error;
   }
 };
 
-// Sign out the current user
-export const signOutUser = async (): Promise<void> => {
+export const logoutUser = async () => {
   try {
     await signOut(auth);
   } catch (error) {
-    console.error('Error signing out user:', error);
+    console.error('Error signing out:', error);
     throw error;
   }
 };
 
-// Get the current user
-export const getCurrentUser = (): User | null => {
+export const getCurrentUser = (): FirebaseUser | null => {
   return auth.currentUser;
 };
 
-// Listen for auth state changes
-export const onAuthChange = (callback: (user: User | null) => void): (() => void) => {
+// Listen to auth state changes
+export const onAuthChange = (callback: (user: FirebaseUser | null) => void) => {
   return onAuthStateChanged(auth, callback);
 };
 
-// Update user wallet address
-export const updateUserWalletAddress = async (
-  uid: string,
-  walletAddress: string
-): Promise<void> => {
+// Define proposal type for Firebase storage
+interface FirebaseProposal {
+  id: number;
+  title: string;
+  description: string;
+  creator: string;
+  createdAt: Date;
+  additionalData?: Record<string, any>;
+}
+
+// Define comment type
+interface ProposalComment {
+  id?: string;
+  proposalId: number;
+  author: string;
+  content: string;
+  createdAt: Date;
+}
+
+// Collection references
+const PROPOSALS_COLLECTION = 'proposals';
+const USERS_COLLECTION = 'users';
+const COMMENTS_COLLECTION = 'comments';
+
+// Save proposal metadata to Firebase
+export const saveProposalToFirebase = async (proposalData: Partial<ProposalData>) => {
   try {
-    const userRef = doc(db, 'users', uid);
-    await updateDoc(userRef, { walletAddress });
+    if (!proposalData.id) {
+      throw new Error('Proposal ID is required');
+    }
+    
+    const proposalRef = doc(db, PROPOSALS_COLLECTION, proposalData.id.toString());
+    
+    // Add timestamp for when the proposal was saved to Firebase
+    const dataToSave = {
+      ...proposalData,
+      metadata: {
+        createdAt: serverTimestamp(),
+      }
+    };
+    
+    await setDoc(proposalRef, dataToSave);
+    return true;
   } catch (error) {
-    console.error('Error updating user wallet address:', error);
+    console.error('Error saving proposal to Firebase:', error);
     throw error;
   }
 };
 
-// Store proposal metadata
-export const storeProposalMetadata = async (
-  proposalId: number,
-  creatorUid: string,
-  creatorEmail: string,
-  walletAddress: string,
-  additionalInfo?: string,
-  category?: string,
-  tags?: string[]
-): Promise<string> => {
+// Get proposal metadata from Firebase
+export const getProposalFromFirebase = async (proposalId: number) => {
   try {
-    const docRef = await addDoc(collection(db, 'proposals'), {
-      proposalId,
-      createdBy: creatorUid,
-      creatorEmail,
-      walletAddress,
-      createdAt: serverTimestamp(),
-      additionalInfo,
-      category,
-      tags,
+    const proposalRef = doc(db, PROPOSALS_COLLECTION, proposalId.toString());
+    const proposalSnap = await getDoc(proposalRef);
+    
+    if (proposalSnap.exists()) {
+      return proposalSnap.data() as ProposalData;
+    }
+    
+    return null;
+  } catch (error) {
+    console.error('Error getting proposal from Firebase:', error);
+    throw error;
+  }
+};
+
+// Add a comment to a proposal
+export const addCommentToProposal = async (
+  proposalId: number, 
+  userAddress: string, 
+  commentText: string
+) => {
+  try {
+    const proposalRef = doc(db, PROPOSALS_COLLECTION, proposalId.toString());
+    const proposalSnap = await getDoc(proposalRef);
+    
+    if (!proposalSnap.exists()) {
+      throw new Error('Proposal not found in Firebase');
+    }
+    
+    const comment = {
+      user: userAddress,
+      text: commentText,
+      timestamp: serverTimestamp()
+    };
+    
+    await updateDoc(proposalRef, {
+      'metadata.comments': arrayUnion(comment)
     });
     
-    return docRef.id;
+    return true;
   } catch (error) {
-    console.error('Error storing proposal metadata:', error);
+    console.error('Error adding comment to proposal:', error);
     throw error;
   }
 };
 
-// Get proposals created by a user
-export const getUserProposals = async (uid: string): Promise<ProposalMetadata[]> => {
+// Get comments for a proposal
+export const getCommentsForProposal = async (proposalId: number) => {
   try {
-    const q = query(collection(db, 'proposals'), where('createdBy', '==', uid));
+    const commentsCollection = collection(db, 'comments');
+    const q = query(
+      commentsCollection,
+      where('proposalId', '==', proposalId),
+      orderBy('createdAt', 'asc')
+    );
+    
     const querySnapshot = await getDocs(q);
+    const comments: ProposalComment[] = [];
     
-    const proposals: ProposalMetadata[] = [];
     querySnapshot.forEach((doc) => {
-      const data = doc.data();
-      proposals.push({
+      comments.push({
         id: doc.id,
-        proposalId: data.proposalId,
-        createdBy: data.createdBy,
-        creatorEmail: data.creatorEmail,
-        walletAddress: data.walletAddress,
-        createdAt: data.createdAt,
-        additionalInfo: data.additionalInfo,
-        category: data.category,
-        tags: data.tags,
-      });
+        ...doc.data(),
+      } as ProposalComment);
     });
     
-    return proposals;
+    return comments;
   } catch (error) {
-    console.error('Error getting user proposals:', error);
+    console.error('Error getting comments:', error);
+    throw error;
+  }
+};
+
+// Get user profile from Firebase
+export const getUserProfile = async (userAddress: string) => {
+  try {
+    const userRef = doc(db, USERS_COLLECTION, userAddress.toLowerCase());
+    const userSnap = await getDoc(userRef);
+    
+    if (userSnap.exists()) {
+      return userSnap.data();
+    }
+    
+    return null;
+  } catch (error) {
+    console.error('Error getting user profile:', error);
+    throw error;
+  }
+};
+
+// Save or update user profile
+export const saveUserProfile = async (userAddress: string, profileData: any) => {
+  try {
+    const userRef = doc(db, USERS_COLLECTION, userAddress.toLowerCase());
+    
+    await setDoc(userRef, {
+      ...profileData,
+      lastUpdated: serverTimestamp()
+    }, { merge: true });
+    
+    return true;
+  } catch (error) {
+    console.error('Error saving user profile:', error);
+    throw error;
+  }
+};
+
+// Store proposal voting analytics
+export const updateProposalAnalytics = async (
+  proposalId: number,
+  data: Record<string, any>
+) => {
+  try {
+    const analyticsRef = doc(db, 'proposalAnalytics', proposalId.toString());
+    await setDoc(analyticsRef, {
+      ...data,
+      updatedAt: serverTimestamp(),
+    }, { merge: true });
+    
+    return true;
+  } catch (error) {
+    console.error('Error updating proposal analytics:', error);
     throw error;
   }
 }; 

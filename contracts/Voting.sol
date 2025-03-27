@@ -1,84 +1,426 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.9;
 
-import "hardhat/console.sol";
+import "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "@openzeppelin/contracts/utils/math/Math.sol";
 
-contract Voting {
-    // Structure for a proposal
-    struct Proposal {
-        string title;
-        string description;
-        uint256 voteCount;
-        uint256 deadline;
-        bool active;
+/**
+ * @title Enhanced Voting Contract for DAO Governance
+ * @dev Implements proposal lifecycle, weighted voting, delegation and automated execution
+ */
+contract Voting is Ownable {
+    using Math for uint256;
+
+    // Governance token for voting weight
+    IERC20 public governanceToken;
+    
+    // Minimum token balance required to create a proposal
+    uint256 public proposalThreshold;
+    
+    // Minimum duration for a proposal in seconds
+    uint256 public minimumVotingPeriod = 1 days;
+    
+    // Minimum votes a proposal needs to be valid
+    uint256 public quorumVotes;
+    
+    // Time delay before a proposal becomes active
+    uint256 public votingDelay = 1 hours;
+    
+    // Grace period for execution after proposal passes
+    uint256 public gracePeriod = 7 days;
+
+    // Enum for proposal states
+    enum ProposalState {
+        Pending,    // Created but not yet active
+        Active,     // Open for voting
+        Canceled,   // Canceled by creator
+        Defeated,   // Failed to reach quorum or majority
+        Succeeded,  // Passed but not yet executed
+        Executed,   // Successfully executed
+        Expired     // Execution window expired
     }
 
-    // Array to store all proposals
-    Proposal[] public proposals;
+    // Structure for a proposal
+    struct Proposal {
+        uint256 id;
+        address proposer;
+        string title;
+        string description;
+        uint256 startTime;      // When voting begins
+        uint256 endTime;        // When voting ends
+        uint256 creationTime;   // When proposal was created
+        bool executed;          // Whether proposal has been executed
+        bool canceled;          // Whether proposal has been canceled
+        uint256 forVotes;       // Votes supporting proposal
+        uint256 againstVotes;   // Votes against proposal
+        uint256 abstainVotes;   // Votes abstaining
+        mapping(address => Receipt) receipts; // Voting receipts
+    }
+
+    // Structure for a vote receipt
+    struct Receipt {
+        bool hasVoted;
+        uint8 support; // 0=against, 1=for, 2=abstain
+        uint256 votes;
+    }
+
+    // Public proposal count
+    uint256 public proposalCount;
     
-    // Mapping to track if an address has voted on a specific proposal
-    mapping(uint256 => mapping(address => bool)) public hasVoted;
+    // Mapping from proposal ID to Proposal
+    mapping(uint256 => Proposal) public proposals;
     
+    // Mapping from address to delegatee
+    mapping(address => address) public delegates;
+    
+    // Cooldown period after voting to prevent flash loans
+    uint256 public voteLockDuration = 3 days;
+    
+    // Mapping to track when a user last voted
+    mapping(address => uint256) public lastVoteTime;
+
     // Events
-    event ProposalCreated(uint256 proposalId, string title, uint256 deadline);
-    event Voted(address voter, uint256 proposalId);
+    event ProposalCreated(
+        uint256 indexed proposalId,
+        address indexed proposer,
+        string title,
+        uint256 startTime,
+        uint256 endTime
+    );
     
-    // Function to create a new proposal
-    function createProposal(string memory _title, string memory _description, uint256 _durationInDays) public returns (uint256) {
+    event VoteCast(
+        address indexed voter,
+        uint256 indexed proposalId,
+        uint8 support,
+        uint256 votes
+    );
+    
+    event ProposalExecuted(uint256 indexed proposalId);
+    event ProposalCanceled(uint256 indexed proposalId);
+    event DelegateChanged(address indexed delegator, address indexed fromDelegate, address indexed toDelegate);
+    event QuorumUpdated(uint256 oldQuorum, uint256 newQuorum);
+    event ProposalThresholdUpdated(uint256 oldThreshold, uint256 newThreshold);
+
+    /**
+     * @dev Constructor to initialize the voting contract
+     * @param _governanceToken The ERC20 token used for governance
+     * @param _proposalThreshold Minimum tokens required to create a proposal
+     * @param _quorumVotes Minimum votes required for a proposal to be valid
+     */
+    constructor(
+        address _governanceToken,
+        uint256 _proposalThreshold,
+        uint256 _quorumVotes
+    ) Ownable(msg.sender) {
+        require(_governanceToken != address(0), "Invalid governance token");
+        
+        governanceToken = IERC20(_governanceToken);
+        proposalThreshold = _proposalThreshold;
+        quorumVotes = _quorumVotes;
+    }
+
+    /**
+     * @dev Create a new proposal
+     * @param _title Title of the proposal
+     * @param _description Description of the proposal
+     * @param _votingDuration Duration of voting period in days
+     */
+    function createProposal(
+        string memory _title,
+        string memory _description,
+        uint256 _votingDuration
+    ) public returns (uint256) {
         require(bytes(_title).length > 0, "Title cannot be empty");
         require(bytes(_description).length > 0, "Description cannot be empty");
-        require(_durationInDays > 0, "Duration must be positive");
+        require(_votingDuration >= 1, "Voting period must be at least 1 day");
         
-        uint256 deadline = block.timestamp + (_durationInDays * 1 days);
+        // Check if caller has enough tokens to create a proposal
+        uint256 userBalance = governanceToken.balanceOf(msg.sender);
+        require(userBalance >= proposalThreshold, "Not enough tokens to create proposal");
         
-        Proposal memory newProposal = Proposal({
-            title: _title,
-            description: _description,
-            voteCount: 0,
-            deadline: deadline,
-            active: true
-        });
+        // Calculate voting window
+        uint256 startTime = block.timestamp + votingDelay;
+        uint256 endTime = startTime + (_votingDuration * 1 days);
         
-        proposals.push(newProposal);
-        uint256 proposalId = proposals.length - 1;
+        // Ensure minimum voting period
+        require(endTime - startTime >= minimumVotingPeriod, "Voting period too short");
         
-        emit ProposalCreated(proposalId, _title, deadline);
+        proposalCount++;
+        uint256 proposalId = proposalCount;
+        
+        Proposal storage newProposal = proposals[proposalId];
+        newProposal.id = proposalId;
+        newProposal.proposer = msg.sender;
+        newProposal.title = _title;
+        newProposal.description = _description;
+        newProposal.startTime = startTime;
+        newProposal.endTime = endTime;
+        newProposal.creationTime = block.timestamp;
+        newProposal.executed = false;
+        newProposal.canceled = false;
+        
+        emit ProposalCreated(proposalId, msg.sender, _title, startTime, endTime);
         
         return proposalId;
     }
-    
-    // Function to vote on a proposal
-    function vote(uint256 _proposalId) public {
-        require(_proposalId < proposals.length, "Invalid proposal ID");
-        require(proposals[_proposalId].active, "Proposal is not active");
-        require(block.timestamp < proposals[_proposalId].deadline, "Voting period has ended");
-        require(!hasVoted[_proposalId][msg.sender], "You have already voted on this proposal");
+
+    /**
+     * @dev Cast a vote on a proposal
+     * @param _proposalId ID of the proposal
+     * @param _support 0=against, 1=for, 2=abstain
+     */
+    function castVote(uint256 _proposalId, uint8 _support) public {
+        require(_proposalId <= proposalCount, "Invalid proposal ID");
+        require(_support <= 2, "Invalid vote type");
         
-        proposals[_proposalId].voteCount++;
-        hasVoted[_proposalId][msg.sender] = true;
+        Proposal storage proposal = proposals[_proposalId];
+        Receipt storage receipt = proposal.receipts[msg.sender];
         
-        emit Voted(msg.sender, _proposalId);
+        require(state(_proposalId) == ProposalState.Active, "Proposal not active");
+        require(!receipt.hasVoted, "Already voted");
+        
+        // Calculate vote weight based on governance token balance
+        // First check if the voter has delegated their votes
+        address actualVoter = delegates[msg.sender] == address(0) ? msg.sender : delegates[msg.sender];
+        uint256 votes = governanceToken.balanceOf(actualVoter);
+        
+        // Record vote
+        receipt.hasVoted = true;
+        receipt.support = _support;
+        receipt.votes = votes;
+        
+        // Update vote counts
+        if (_support == 0) {
+            proposal.againstVotes += votes;
+        } else if (_support == 1) {
+            proposal.forVotes += votes;
+        } else if (_support == 2) {
+            proposal.abstainVotes += votes;
+        }
+        
+        // Record last vote time to prevent quick selling after voting
+        lastVoteTime[msg.sender] = block.timestamp;
+        
+        emit VoteCast(msg.sender, _proposalId, _support, votes);
     }
-    
-    // Function to get a proposal by ID
-    function getProposal(uint256 _proposalId) public view returns (string memory, string memory, uint256, uint256, bool) {
-        require(_proposalId < proposals.length, "Invalid proposal ID");
+
+    /**
+     * @dev Execute a successful proposal
+     * @param _proposalId ID of the proposal to execute
+     */
+    function executeProposal(uint256 _proposalId) public {
+        require(_proposalId <= proposalCount, "Invalid proposal ID");
         
-        Proposal memory proposal = proposals[_proposalId];
-        return (proposal.title, proposal.description, proposal.voteCount, proposal.deadline, proposal.active);
+        Proposal storage proposal = proposals[_proposalId];
+        
+        require(state(_proposalId) == ProposalState.Succeeded, "Proposal can't be executed");
+        
+        proposal.executed = true;
+        
+        emit ProposalExecuted(_proposalId);
+        
+        // In a production application, this is where you'd implement
+        // the actual execution logic (e.g., call smart contracts, transfer funds)
     }
-    
-    // Function to get the total number of proposals
+
+    /**
+     * @dev Cancel a proposal
+     * @param _proposalId ID of the proposal to cancel
+     */
+    function cancelProposal(uint256 _proposalId) public {
+        require(_proposalId <= proposalCount, "Invalid proposal ID");
+        
+        Proposal storage proposal = proposals[_proposalId];
+        
+        // Only allow cancellation if not yet executed/expired/defeated
+        ProposalState currentState = state(_proposalId);
+        require(
+            currentState != ProposalState.Executed &&
+            currentState != ProposalState.Expired &&
+            currentState != ProposalState.Canceled,
+            "Proposal can't be canceled"
+        );
+        
+        // Only proposer or governance (owner) can cancel
+        require(
+            msg.sender == proposal.proposer || msg.sender == owner(),
+            "Not authorized to cancel"
+        );
+        
+        proposal.canceled = true;
+        
+        emit ProposalCanceled(_proposalId);
+    }
+
+    /**
+     * @dev Get the current state of a proposal
+     * @param _proposalId ID of the proposal
+     * @return ProposalState indicating the current state
+     */
+    function state(uint256 _proposalId) public view returns (ProposalState) {
+        require(_proposalId <= proposalCount, "Invalid proposal ID");
+        
+        Proposal storage proposal = proposals[_proposalId];
+        
+        if (proposal.canceled) {
+            return ProposalState.Canceled;
+        }
+        
+        if (proposal.executed) {
+            return ProposalState.Executed;
+        }
+        
+        if (block.timestamp < proposal.startTime) {
+            return ProposalState.Pending;
+        }
+        
+        if (block.timestamp <= proposal.endTime) {
+            return ProposalState.Active;
+        }
+        
+        // Check if proposal has reached quorum and majority
+        if (proposal.forVotes > proposal.againstVotes && proposal.forVotes + proposal.abstainVotes >= quorumVotes) {
+            // Check if in grace period
+            if (block.timestamp <= proposal.endTime + gracePeriod) {
+                return ProposalState.Succeeded;
+            } else {
+                return ProposalState.Expired;
+            }
+        } else {
+            return ProposalState.Defeated;
+        }
+    }
+
+    /**
+     * @dev Get proposal details
+     * @param _proposalId ID of the proposal
+     * @return title The proposal title
+     * @return description The proposal description
+     * @return forVotes Number of votes in favor
+     * @return againstVotes Number of votes against
+     * @return abstainVotes Number of abstained votes
+     * @return startTime The proposal start time
+     * @return endTime The proposal end time
+     * @return currentState The current state of the proposal
+     */
+    function getProposal(uint256 _proposalId) public view returns (
+        string memory title,
+        string memory description,
+        uint256 forVotes,
+        uint256 againstVotes,
+        uint256 abstainVotes,
+        uint256 startTime,
+        uint256 endTime,
+        ProposalState currentState
+    ) {
+        require(_proposalId <= proposalCount, "Invalid proposal ID");
+        
+        Proposal storage proposal = proposals[_proposalId];
+        
+        return (
+            proposal.title,
+            proposal.description,
+            proposal.forVotes,
+            proposal.againstVotes,
+            proposal.abstainVotes,
+            proposal.startTime,
+            proposal.endTime,
+            state(_proposalId)
+        );
+    }
+
+    /**
+     * @dev Get the total number of proposals
+     * @return Count of proposals
+     */
     function getProposalCount() public view returns (uint256) {
-        return proposals.length;
+        return proposalCount;
     }
-    
-    // Function to close a proposal if the deadline has passed
-    function closeExpiredProposal(uint256 _proposalId) public {
-        require(_proposalId < proposals.length, "Invalid proposal ID");
-        require(proposals[_proposalId].active, "Proposal is already inactive");
-        require(block.timestamp >= proposals[_proposalId].deadline, "Voting period has not ended yet");
+
+    /**
+     * @dev Check if a user has voted on a proposal
+     * @param _proposalId ID of the proposal
+     * @param _voter Address of the voter
+     * @return Whether the voter has voted, their vote choice, and voting power
+     */
+    function hasVoted(uint256 _proposalId, address _voter) public view returns (bool, uint8, uint256) {
+        require(_proposalId <= proposalCount, "Invalid proposal ID");
         
-        proposals[_proposalId].active = false;
+        Receipt storage receipt = proposals[_proposalId].receipts[_voter];
+        
+        return (receipt.hasVoted, receipt.support, receipt.votes);
+    }
+
+    /**
+     * @dev Delegate votes to another address
+     * @param _delegatee Address to delegate votes to
+     */
+    function delegate(address _delegatee) public {
+        require(_delegatee != address(0), "Cannot delegate to zero address");
+        require(_delegatee != msg.sender, "Cannot delegate to self");
+        
+        address oldDelegate = delegates[msg.sender];
+        delegates[msg.sender] = _delegatee;
+        
+        emit DelegateChanged(msg.sender, oldDelegate, _delegatee);
+    }
+
+    /**
+     * @dev Remove delegation
+     */
+    function undelegate() public {
+        address oldDelegate = delegates[msg.sender];
+        require(oldDelegate != address(0), "Not currently delegating");
+        
+        delegates[msg.sender] = address(0);
+        
+        emit DelegateChanged(msg.sender, oldDelegate, address(0));
+    }
+
+    /**
+     * @dev Update the quorum threshold
+     * @param _newQuorum New quorum value
+     */
+    function setQuorumVotes(uint256 _newQuorum) public onlyOwner {
+        uint256 oldQuorum = quorumVotes;
+        quorumVotes = _newQuorum;
+        
+        emit QuorumUpdated(oldQuorum, _newQuorum);
+    }
+
+    /**
+     * @dev Update the proposal threshold
+     * @param _newThreshold New threshold value
+     */
+    function setProposalThreshold(uint256 _newThreshold) public onlyOwner {
+        uint256 oldThreshold = proposalThreshold;
+        proposalThreshold = _newThreshold;
+        
+        emit ProposalThresholdUpdated(oldThreshold, _newThreshold);
+    }
+
+    /**
+     * @dev Update the voting delay
+     * @param _newVotingDelay New voting delay in seconds
+     */
+    function setVotingDelay(uint256 _newVotingDelay) public onlyOwner {
+        votingDelay = _newVotingDelay;
+    }
+
+    /**
+     * @dev Update the minimum voting period
+     * @param _newMinimumVotingPeriod New voting period in seconds
+     */
+    function setMinimumVotingPeriod(uint256 _newMinimumVotingPeriod) public onlyOwner {
+        minimumVotingPeriod = _newMinimumVotingPeriod;
+    }
+
+    /**
+     * @dev Update the grace period for execution
+     * @param _newGracePeriod New grace period in seconds
+     */
+    function setGracePeriod(uint256 _newGracePeriod) public onlyOwner {
+        gracePeriod = _newGracePeriod;
     }
 } 
