@@ -1,0 +1,53 @@
+{
+  "name": "eth-voting-app",
+  "version": "1.0.0",
+  "description": "Decentralized Voting Application on Ethereum",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint",
+    "test": "hardhat test",
+    "node": "hardhat node",
+    "compile": "hardhat compile",
+    "deploy:local": "hardhat run scripts/deploy.js --network localhost",
+    "deploy:sepolia": "hardhat run scripts/deploy.js --network sepolia",
+    "deploy:mainnet": "hardhat run scripts/deploy.js --network mainnet"
+  },
+  "keywords": [
+    "ethereum",
+    "blockchain",
+    "voting",
+    "dapp",
+    "web3",
+    "nextjs"
+  ],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "@nomicfoundation/hardhat-toolbox": "^5.0.0",
+    "@tanstack/react-query": "^4.29.25",
+    "dotenv": "^16.4.7",
+    "ethers": "^6.10.0",
+    "firebase": "^11.5.0",
+    "hardhat": "^2.22.19",
+    "next": "^14.0.4",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "viem": "^1.10.14",
+    "wagmi": "^1.4.1"
+  },
+  "devDependencies": {
+    "@tailwindcss/forms": "^0.5.10",
+    "@types/node": "^20.9.0",
+    "@types/react": "^18.2.37",
+    "@types/react-dom": "^18.2.15",
+    "autoprefixer": "^10.4.16",
+    "eslint": "^8.53.0",
+    "eslint-config-next": "^14.0.2",
+    "postcss": "^8.5.3",
+    "tailwindcss": "^3.3.5",
+    "typescript": "^5.2.2"
+  }
+}

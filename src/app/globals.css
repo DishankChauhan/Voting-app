@@ -1,0 +1,54 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --foreground-rgb: 255, 255, 255;
+  --background-start-rgb: 17, 24, 39;
+  --background-end-rgb: 15, 23, 42;
+  
+  /* Dark theme colors */
+  --dark-bg-primary: 15, 23, 42;
+  --dark-bg-secondary: 30, 41, 59;
+  --dark-text-primary: 255, 255, 255;
+  --dark-text-secondary: 156, 163, 175;
+  --dark-border: 51, 65, 85;
+  --dark-accent: 59, 130, 246;
+}
+
+body {
+  color: rgb(var(--foreground-rgb));
+  background: linear-gradient(
+      to bottom,
+      rgb(var(--background-start-rgb)),
+      rgb(var(--background-end-rgb))
+    )
+    fixed;
+}
+
+/* Dark theme card */
+.dark-card {
+  @apply bg-slate-800 border border-slate-700 shadow-lg text-white;
+}
+
+/* Dark theme input */
+.dark-input {
+  @apply bg-slate-700 border-slate-600 text-white placeholder-gray-400 focus:ring-blue-500 focus:border-blue-500;
+}
+
+/* Dark theme button */
+.dark-button-primary {
+  @apply bg-blue-600 hover:bg-blue-700 text-white;
+}
+
+.dark-button-secondary {
+  @apply bg-slate-700 hover:bg-slate-600 text-white;
+}
+
+.dark-button-danger {
+  @apply bg-red-600 hover:bg-red-700 text-white;
+}
+
+.dark-button-disabled {
+  @apply bg-slate-700 text-slate-500 cursor-not-allowed;
+} 

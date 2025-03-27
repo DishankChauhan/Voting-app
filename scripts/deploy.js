@@ -1,0 +1,18 @@
+const hre = require("hardhat");
+
+async function main() {
+  console.log("Deploying Voting contract...");
+
+  const votingContract = await hre.ethers.deployContract("Voting");
+  await votingContract.waitForDeployment();
+
+  const address = await votingContract.getAddress();
+  console.log(`Voting contract deployed to: ${address}`);
+}
+
+// We recommend this pattern to be able to use async/await everywhere
+// and properly handle errors.
+main().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+}); 
