@@ -43,6 +43,7 @@
     "clsx": "^2.1.1",
     "dicons": "^1.1.7",
     "dotenv": "^16.4.7",
+    "dotted-map": "^2.2.3",
     "ethers": "^6.10.0",
     "firebase": "^11.5.0",
     "framer-motion": "^12.6.2",

@@ -30,9 +30,9 @@ export function GlowCard({
       whileHover={{ scale: 1.02 }}
       whileTap={{ scale: 0.98 }}
       className={cn(
-        "relative overflow-hidden rounded-xl border border-gray-800/40 bg-gray-900/50 p-6 backdrop-blur-sm",
+        "relative overflow-hidden rounded-xl border border-transparent bg-gray-900/50 p-6 backdrop-blur-sm",
         "transition-all duration-300 ease-in-out",
-        "hover:border-gray-700/0",
+        "z-10",
         className
       )}
     >
@@ -46,10 +46,11 @@ export function GlowCard({
       <GlowingEffect 
         disabled={false} 
         glow={true} 
-        blur={5}
-        spread={30}
-        borderWidth={1.5}
+        blur={10}
+        spread={40}
+        borderWidth={2}
         variant="default"
+        proximity={10}
       />
     </motion.div>
   );

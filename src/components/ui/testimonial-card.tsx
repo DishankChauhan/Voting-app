@@ -36,6 +36,7 @@ export function TestimonialCard({
         "hover:from-muted/60 hover:to-muted/20",
         "max-w-[320px] sm:max-w-[320px]",
         "transition-colors duration-300",
+        "z-10",
         className
       )}
     >
@@ -59,10 +60,11 @@ export function TestimonialCard({
       <GlowingEffect 
         disabled={false} 
         glow={true} 
-        blur={5}
-        spread={25}
-        borderWidth={1}
+        blur={10}
+        spread={40}
+        borderWidth={2}
         variant="default"
+        proximity={10}
       />
     </Card>
   )

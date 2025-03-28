@@ -26,6 +26,7 @@ export function TestimonialsSection({
       "bg-background/20 backdrop-blur-sm text-foreground relative",
       "py-12 sm:py-24 md:py-32 px-0 rounded-xl border border-transparent overflow-hidden",
       "my-12 mx-4 md:mx-8",
+      "z-10",
       className
     )}>
       <div className="mx-auto flex max-w-container flex-col items-center gap-4 text-center sm:gap-16 relative z-10">
@@ -60,10 +61,11 @@ export function TestimonialsSection({
       <GlowingEffect 
         disabled={false} 
         glow={true} 
-        blur={10}
-        spread={40}
-        borderWidth={2}
+        blur={15}
+        spread={50}
+        borderWidth={3}
         variant="default"
+        proximity={10}
       />
     </section>
   )
