@@ -1,3 +1,5 @@
+'use client';
+
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
@@ -6,6 +8,7 @@ import { getProposals, getTokenBalance } from '@/services/contractService';
 import { getProposalFromFirebase } from '@/services/firebaseService';
 import { ProposalState, VoteType } from '@/lib/contractConfig';
 import { toast } from 'react-hot-toast';
+import logger from '@/utils/logger';
 
 // Helper function to return the state as a human-readable string
 const getProposalStateText = (state: ProposalState) => {
@@ -84,20 +87,20 @@ export default function ProposalList() {
     setError(null);
     
     try {
-      console.log('Fetching proposals...');
+      logger.debug('Fetching proposals...');
       
       // Check if user is connected
       if (!user || !user.walletAddress) {
-        console.log('No wallet connected, connecting to view proposals as guest');
+        logger.debug('No wallet connected, connecting to view proposals as guest');
       } else {
-        console.log('Fetching proposals for user:', user.walletAddress);
+        logger.debug('Fetching proposals for user:', user.walletAddress);
       }
       
       const onChainProposals = await getProposals();
-      console.log('Proposals fetched from blockchain:', onChainProposals);
+      logger.debug('Proposals fetched from blockchain:', onChainProposals);
       
       if (onChainProposals.length === 0) {
-        console.log('No proposals found on chain');
+        logger.debug('No proposals found on chain');
       }
       
       // Fetch additional metadata from Firebase if needed
@@ -107,21 +110,20 @@ export default function ProposalList() {
             const metadata = await getProposalFromFirebase(proposal.id);
             return {
               ...proposal,
-              metadata: metadata || {},
+              metadata: metadata || {}
             };
-          } catch (error) {
-            console.error(`Error fetching metadata for proposal ${proposal.id}:`, error);
+          } catch (err) {
+            logger.warn(`Failed to fetch metadata for proposal ${proposal.id}:`, err);
             return proposal;
           }
         })
       );
       
-      console.log('Proposals with metadata:', proposalsWithMetadata);
+      logger.debug('Proposals with metadata:', proposalsWithMetadata);
       setProposals(proposalsWithMetadata);
-    } catch (error: any) {
-      console.error('Error fetching proposals:', error);
-      setError(error.message || 'Failed to fetch proposals');
-      toast.error('Failed to fetch proposals: ' + (error.message || 'Unknown error'));
+    } catch (error) {
+      logger.error('Error fetching proposals:', error);
+      setError('Failed to load proposals. Please try again later.');
     } finally {
       setIsLoading(false);
     }

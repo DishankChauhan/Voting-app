@@ -1,4 +1,5 @@
 // Fix Firebase Permissions Issue
+import logger from '../utils/logger';
 
 /*
 This file provides steps to fix the "Missing or insufficient permissions" error
@@ -12,7 +13,8 @@ Common causes of this error:
 Follow these steps:
 */
 
-console.log(`
+export const showFirebasePermissionsFix = () => {
+  logger.info(`
 ===== FIX FIREBASE PERMISSIONS =====
 
 1. FIREBASE SECURITY RULES
@@ -25,7 +27,7 @@ console.log(`
    - Add this code before any database access:
      
      if (!auth.currentUser) {
-       console.error("User not authenticated");
+       logger.error("User not authenticated");
        return;
      }
 
@@ -47,6 +49,7 @@ NEXT_PUBLIC_FIREBASE_APP_ID=your_app_id
    - Stop and restart your Next.js development server
    - Run: npm run dev
 `);
+};
 
 // The specific issue you're facing is likely that the user is not properly 
 // authenticated when trying to access Firestore, or your security rules 

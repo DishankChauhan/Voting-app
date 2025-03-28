@@ -1,189 +1,323 @@
-import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+'use client';
+
+import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import { ethers } from 'ethers';
-import { getTokenBalance } from '@/services/contractService';
+import { getProvider } from '@/services/contractService';
+import { toast } from 'react-hot-toast';
+import { logger } from '@/utils/logger';
+import { User as FirebaseUser } from 'firebase/auth';
+import { getUserProfile } from '@/services/firebaseService';
 
-// Define user type
-export interface User {
-  walletAddress: string;
-  tokenBalance?: string;
-}
+export type User = {
+  walletAddress?: string;
+  firebaseUser?: FirebaseUser | null;
+  displayName?: string;
+  email?: string;
+  isAdmin?: boolean;
+  isAuthenticated: boolean;
+};
 
-// Define context type
-interface AuthContextType {
+export interface AuthContextType {
   user: User | null;
   loading: boolean;
   connectWallet: () => Promise<void>;
   disconnectWallet: () => void;
-  error: string | null;
+  logout: () => Promise<void>;
+  refreshUser: () => Promise<void>;
 }
 
-// Create context with default values
-const AuthContext = createContext<AuthContextType>({
-  user: null,
-  loading: true,
-  connectWallet: async () => {},
-  disconnectWallet: () => {},
-  error: null,
-});
+const AuthContext = createContext<AuthContextType | null>(null);
 
-// Hook for easy context use
-export const useAuth = () => useContext(AuthContext);
+export const useAuth = () => {
+  const context = useContext(AuthContext);
+  if (!context) {
+    throw new Error('useAuth must be used within an AuthProvider');
+  }
+  return context;
+};
 
-// Provider component
 export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
 
-  // Initialize - Check if the user was previously connected
+  // Initialize auth state from localStorage and/or wallet on mount
   useEffect(() => {
-    checkIfWalletIsConnected();
-  }, []);
-
-  // Check if wallet is already connected
-  const checkIfWalletIsConnected = async () => {
-    try {
-      const { ethereum } = window as any;
-      
-      if (!ethereum) {
-        setLoading(false);
-        return;
-      }
-
-      // Check if we're authorized to access the user's wallet
-      const accounts = await ethereum.request({ method: 'eth_accounts' });
-      
-      if (accounts.length > 0) {
-        const address = accounts[0];
-        // Update state
-        setUser({
-          walletAddress: address,
-        });
+    const initAuth = async () => {
+      try {
+        setLoading(true);
+        // Try to get ethereum provider
+        const provider = await getProvider();
+        const firebaseUserStr = localStorage.getItem('firebase-user');
+        const firebaseUser = firebaseUserStr ? JSON.parse(firebaseUserStr) : null;
         
-        // Setup listener for account changes
-        setupEventListeners();
-      }
-    } catch (err: any) {
-      setError(err.message || 'Failed to check wallet connection');
-      console.error(err);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // Set up event listeners for Metamask
-  const setupEventListeners = () => {
-    const { ethereum } = window as any;
-    
-    if (ethereum) {
-      // Handle account change
-      ethereum.on('accountsChanged', (accounts: string[]) => {
-        if (accounts.length === 0) {
-          // Metamask is locked or the user has not connected any accounts
-          setUser(null);
-        } else {
-          setUser({
-            walletAddress: accounts[0],
-          });
-        }
-      });
-
-      // Handle chain change
-      ethereum.on('chainChanged', (_chainId: string) => {
-        // Reload the page when they change networks
-        window.location.reload();
-      });
-    }
-  };
-
-  // Connect wallet
-  const connectWallet = async () => {
-    try {
-      setError(null);
-      const { ethereum } = window as any;
-      
-      if (!ethereum) {
-        setError('Please install MetaMask to use this app');
-        return;
-      }
-      
-      setLoading(true);
-      
-      // Request access to accounts
-      const accounts = await ethereum.request({ method: 'eth_requestAccounts' });
-      
-      // Get network ID
-      const provider = new ethers.BrowserProvider(ethereum);
-      const network = await provider.getNetwork();
-      
-      // Check if network is Sepolia (chain ID 11155111)
-      if (network.chainId.toString() !== '11155111') {
-        // Prompt user to switch to Sepolia
-        try {
-          await ethereum.request({
-            method: 'wallet_switchEthereumChain',
-            params: [{ chainId: '0xaa36a7' }], // chainId in hex
-          });
-        } catch (switchError: any) {
-          // This error code indicates that the chain has not been added to MetaMask
-          if (switchError.code === 4902) {
-            try {
-              await ethereum.request({
-                method: 'wallet_addEthereumChain',
-                params: [{
-                  chainId: '0xaa36a7',
-                  chainName: 'Sepolia Testnet',
-                  nativeCurrency: {
-                    name: 'Sepolia ETH',
-                    symbol: 'ETH',
-                    decimals: 18
-                  },
-                  rpcUrls: ['https://sepolia.infura.io/v3/'],
-                  blockExplorerUrls: ['https://sepolia.etherscan.io']
-                }],
-              });
-            } catch (addError) {
-              throw new Error('Failed to add Sepolia network to MetaMask');
-            }
-          } else {
-            throw switchError;
+        // If Firebase user exists, make sure the auth token cookie is set
+        if (firebaseUser) {
+          // Set cookie for server-side authentication if it doesn't exist
+          if (!document.cookie.includes('auth-token')) {
+            document.cookie = `auth-token=true; path=/; max-age=${60 * 60 * 24 * 7}`; // 7 days
+            logger.debug('Auth token cookie set');
           }
         }
+        
+        // Check if already connected
+        if (provider && window.ethereum) {
+          const accounts = await provider.send("eth_accounts", []);
+          
+          if (accounts.length > 0) {
+            const address = accounts[0];
+            logger.debug('Wallet already connected:', { address });
+            
+            // Get user profile if available
+            let userProfile = null;
+            if (address) {
+              try {
+                userProfile = await getUserProfile(address);
+              } catch (error) {
+                logger.warn('Failed to load user profile:', error);
+              }
+            }
+            
+            setUser({
+              walletAddress: address,
+              firebaseUser,
+              displayName: userProfile?.displayName || firebaseUser?.displayName,
+              email: firebaseUser?.email,
+              isAdmin: userProfile?.isAdmin || false,
+              isAuthenticated: !!firebaseUser
+            });
+          } else if (firebaseUser) {
+            // User is authenticated with Firebase but doesn't have wallet connected
+            setUser({
+              firebaseUser,
+              displayName: firebaseUser.displayName || undefined,
+              email: firebaseUser.email || undefined,
+              isAuthenticated: true
+            });
+          } else {
+            setUser(null);
+          }
+        } else if (firebaseUser) {
+          // Only Firebase authentication, no wallet
+          setUser({
+            firebaseUser,
+            displayName: firebaseUser.displayName || undefined,
+            email: firebaseUser.email || undefined,
+            isAuthenticated: true
+          });
+        } else {
+          setUser(null);
+        }
+      } catch (error) {
+        logger.error('Error initializing auth:', error);
+        setUser(null);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    initAuth();
+    
+    // Listen for account changes
+    const handleAccountsChanged = async (accounts: string[]) => {
+      if (accounts.length === 0) {
+        // User disconnected wallet
+        const firebaseUserStr = localStorage.getItem('firebase-user');
+        const firebaseUser = firebaseUserStr ? JSON.parse(firebaseUserStr) : null;
+        
+        if (firebaseUser) {
+          setUser({
+            firebaseUser,
+            displayName: firebaseUser.displayName || undefined,
+            email: firebaseUser.email || undefined,
+            isAuthenticated: true
+          });
+        } else {
+          setUser(null);
+        }
+        
+        logger.debug('Wallet disconnected');
+      } else {
+        const address = accounts[0];
+        const firebaseUserStr = localStorage.getItem('firebase-user');
+        const firebaseUser = firebaseUserStr ? JSON.parse(firebaseUserStr) : null;
+        
+        // Get user profile if available
+        let userProfile = null;
+        if (address) {
+          try {
+            userProfile = await getUserProfile(address);
+          } catch (error) {
+            logger.warn('Failed to load user profile:', error);
+          }
+        }
+        
+        setUser({
+          walletAddress: address,
+          firebaseUser,
+          displayName: userProfile?.displayName || firebaseUser?.displayName,
+          email: firebaseUser?.email,
+          isAdmin: userProfile?.isAdmin || false,
+          isAuthenticated: !!firebaseUser
+        });
+        
+        logger.debug('Wallet account changed:', { address });
+      }
+    };
+
+    if (window.ethereum) {
+      window.ethereum.on('accountsChanged', handleAccountsChanged);
+    }
+
+    return () => {
+      if (window.ethereum) {
+        window.ethereum.removeListener('accountsChanged', handleAccountsChanged);
+      }
+    };
+  }, []);
+
+  // Connect wallet function
+  const connectWallet = async () => {
+    try {
+      if (!window.ethereum) {
+        toast.error('Please install MetaMask to connect your wallet');
+        return;
+      }
+
+      const provider = new ethers.BrowserProvider(window.ethereum);
+      const accounts = await provider.send("eth_requestAccounts", []);
+      
+      if (accounts.length === 0) {
+        throw new Error('No accounts found');
       }
       
-      // Set user after successful connection
+      const address = accounts[0];
+      const firebaseUserStr = localStorage.getItem('firebase-user');
+      const firebaseUser = firebaseUserStr ? JSON.parse(firebaseUserStr) : null;
+      
+      // Get user profile if available
+      let userProfile = null;
+      if (address) {
+        try {
+          userProfile = await getUserProfile(address);
+        } catch (error) {
+          logger.warn('Failed to load user profile:', error);
+        }
+      }
+      
       setUser({
-        walletAddress: accounts[0],
+        walletAddress: address,
+        firebaseUser,
+        displayName: userProfile?.displayName || firebaseUser?.displayName,
+        email: firebaseUser?.email,
+        isAdmin: userProfile?.isAdmin || false,
+        isAuthenticated: !!firebaseUser
       });
       
-      // Set up event listeners
-      setupEventListeners();
-    } catch (err: any) {
-      setError(err.message || 'Failed to connect wallet');
-      console.error(err);
-    } finally {
-      setLoading(false);
+      toast.success('Wallet connected successfully');
+      logger.debug('Wallet connected:', { address });
+    } catch (error: any) {
+      logger.error('Error connecting wallet:', error);
+      
+      if (error.code === 4001) {
+        // User rejected request
+        toast.error('You rejected the connection request');
+      } else {
+        toast.error('Failed to connect wallet');
+      }
     }
   };
 
-  // Disconnect wallet
+  // Disconnect wallet function
   const disconnectWallet = () => {
-    setUser(null);
-    // Note: MetaMask doesn't actually have a "disconnect" method
-    // We're just removing the user from the app state
+    const firebaseUserStr = localStorage.getItem('firebase-user');
+    const firebaseUser = firebaseUserStr ? JSON.parse(firebaseUserStr) : null;
+    
+    if (firebaseUser) {
+      setUser({
+        firebaseUser,
+        displayName: firebaseUser.displayName || undefined,
+        email: firebaseUser.email || undefined,
+        isAuthenticated: true
+      });
+    } else {
+      setUser(null);
+    }
+    
+    toast.success('Wallet disconnected');
+    logger.debug('Wallet disconnected');
   };
-
-  // Create context value
-  const value = {
-    user,
-    loading,
-    connectWallet,
-    disconnectWallet,
-    error,
+  
+  // Logout function - clears Firebase user and disconnects wallet
+  const logout = async () => {
+    try {
+      // Clear Firebase user from localStorage
+      localStorage.removeItem('firebase-user');
+      
+      // Clear auth token cookie (will be handled by middleware)
+      document.cookie = 'auth-token=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;';
+      
+      // Reset user state
+      setUser(null);
+      
+      toast.success('Logged out successfully');
+      logger.debug('User logged out');
+      
+      // Redirect to landing page
+      window.location.href = '/landing';
+    } catch (error) {
+      logger.error('Error logging out:', error);
+      toast.error('Failed to log out');
+    }
+  };
+  
+  // Refresh user data
+  const refreshUser = async () => {
+    try {
+      setLoading(true);
+      
+      const firebaseUserStr = localStorage.getItem('firebase-user');
+      const firebaseUser = firebaseUserStr ? JSON.parse(firebaseUserStr) : null;
+      
+      // Get user profile if wallet is connected
+      let userProfile = null;
+      if (user?.walletAddress) {
+        try {
+          userProfile = await getUserProfile(user.walletAddress);
+        } catch (error) {
+          logger.warn('Failed to load user profile:', error);
+        }
+      }
+      
+      if (user?.walletAddress || firebaseUser) {
+        setUser({
+          ...user,
+          firebaseUser,
+          displayName: userProfile?.displayName || firebaseUser?.displayName,
+          email: firebaseUser?.email,
+          isAdmin: userProfile?.isAdmin || false,
+          isAuthenticated: !!firebaseUser
+        });
+      } else {
+        setUser(null);
+      }
+    } catch (error) {
+      logger.error('Error refreshing user data:', error);
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
-    <AuthContext.Provider value={value}>
+    <AuthContext.Provider
+      value={{
+        user,
+        loading,
+        connectWallet,
+        disconnectWallet,
+        logout,
+        refreshUser
+      }}
+    >
       {children}
     </AuthContext.Provider>
   );

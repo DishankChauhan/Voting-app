@@ -9,6 +9,7 @@ import { getProposalFromFirebase } from '@/services/firebaseService';
 import { ProposalState, VoteType } from '@/lib/contractConfig';
 import { toast } from 'react-hot-toast';
 import ConnectWallet from '@/components/wallet/ConnectWallet';
+import logger from '@/utils/logger';
 
 // Helper function to return the state as a human-readable string
 const getProposalStateText = (state: ProposalState) => {
@@ -92,7 +93,7 @@ export default function ProposalDetail({ params }: { params: { id: string } }) {
     setError(null);
     
     try {
-      console.log(`Fetching proposal ${proposalId}...`);
+      logger.debug(`Fetching proposal ${proposalId}...`);
       
       const proposals = await getProposals();
       const proposal = proposals.find(p => p.id === proposalId);

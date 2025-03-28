@@ -1,11 +1,17 @@
-import { Metadata } from 'next';
+import { Inter } from 'next/font/google';
+import type { Metadata } from 'next';
+import { AuthProvider } from '@/context/AuthContext';
+import { FirebaseAuthProvider } from '@/context/FirebaseAuthContext';
 import { Toaster } from 'react-hot-toast';
+import { ThemeProvider } from 'next-themes';
 import './globals.css';
-import ClientProviders from './providers';
+import { AnimeNavBar } from '@/components/ui/anime-navbar';
+
+const inter = Inter({ subsets: ['latin'] });
 
 export const metadata: Metadata = {
-  title: 'Decentralized Voting App',
-  description: 'A decentralized voting application built on Ethereum blockchain',
+  title: 'DAO Voting',
+  description: 'A decentralized governance platform',
 };
 
 export default function RootLayout({
@@ -14,23 +20,19 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en" className="dark">
-      <body>
-        <ClientProviders>
-          <div className="min-h-screen bg-slate-900 text-white">
-            <Toaster
-              position="top-center"
-              toastOptions={{
-                duration: 3000,
-                style: {
-                  background: '#1E293B',
-                  color: '#fff',
-                },
-              }}
-            />
-            {children}
-          </div>
-        </ClientProviders>
+    <html lang="en">
+      <body className={inter.className}>
+        <FirebaseAuthProvider>
+          <AuthProvider>
+            <ThemeProvider attribute="class" defaultTheme="dark" enableSystem>
+              <main className="min-h-screen">
+                <AnimeNavBar />
+                {children}
+                <Toaster position="bottom-right" />
+              </main>
+            </ThemeProvider>
+          </AuthProvider>
+        </FirebaseAuthProvider>
       </body>
     </html>
   );

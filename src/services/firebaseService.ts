@@ -24,6 +24,7 @@ import {
 } from 'firebase/firestore';
 import { auth, db } from '@/lib/firebase';
 import { ProposalData } from '@/lib/contractConfig';
+import logger from '@/utils/logger';
 
 // Firebase auth functions
 export const registerUser = async (email: string, password: string, displayName: string) => {
@@ -40,9 +41,16 @@ export const registerUser = async (email: string, password: string, displayName:
       walletAddresses: []
     });
     
+    // Store user data in localStorage for client-side auth
+    localStorage.setItem('firebase-user', JSON.stringify(userCredential.user));
+    
+    // Set auth token cookie for server-side authentication
+    document.cookie = `auth-token=true; path=/; max-age=${60 * 60 * 24 * 7}`; // 7 days
+    
+    logger.debug('User registered successfully, auth token set');
     return userCredential.user;
   } catch (error) {
-    console.error('Error registering user:', error);
+    logger.error('Error registering user:', error);
     throw error;
   }
 };
@@ -50,9 +58,17 @@ export const registerUser = async (email: string, password: string, displayName:
 export const loginUser = async (email: string, password: string) => {
   try {
     const userCredential = await signInWithEmailAndPassword(auth, email, password);
+    
+    // Store user data in localStorage for client-side auth
+    localStorage.setItem('firebase-user', JSON.stringify(userCredential.user));
+    
+    // Set auth token cookie for server-side authentication
+    document.cookie = `auth-token=true; path=/; max-age=${60 * 60 * 24 * 7}`; // 7 days
+    
+    logger.debug('User logged in successfully, auth token set');
     return userCredential.user;
   } catch (error) {
-    console.error('Error logging in:', error);
+    logger.error('Error logging in:', error);
     throw error;
   }
 };
@@ -61,7 +77,7 @@ export const logoutUser = async () => {
   try {
     await signOut(auth);
   } catch (error) {
-    console.error('Error signing out:', error);
+    logger.error('Error signing out:', error);
     throw error;
   }
 };
@@ -119,7 +135,7 @@ export const saveProposalToFirebase = async (proposalData: Partial<ProposalData>
     await setDoc(proposalRef, dataToSave);
     return true;
   } catch (error) {
-    console.error('Error saving proposal to Firebase:', error);
+    logger.error('Error saving proposal to Firebase:', error);
     throw error;
   }
 };
@@ -136,7 +152,7 @@ export const getProposalFromFirebase = async (proposalId: number) => {
     
     return null;
   } catch (error) {
-    console.error('Error getting proposal from Firebase:', error);
+    logger.error('Error getting proposal from Firebase:', error);
     throw error;
   }
 };
@@ -167,7 +183,7 @@ export const addCommentToProposal = async (
     
     return true;
   } catch (error) {
-    console.error('Error adding comment to proposal:', error);
+    logger.error('Error adding comment to proposal:', error);
     throw error;
   }
 };
@@ -194,7 +210,7 @@ export const getCommentsForProposal = async (proposalId: number) => {
     
     return comments;
   } catch (error) {
-    console.error('Error getting comments:', error);
+    logger.error('Error getting comments:', error);
     throw error;
   }
 };
@@ -211,7 +227,7 @@ export const getUserProfile = async (userAddress: string) => {
     
     return null;
   } catch (error) {
-    console.error('Error getting user profile:', error);
+    logger.error('Error getting user profile:', error);
     throw error;
   }
 };
@@ -228,7 +244,7 @@ export const saveUserProfile = async (userAddress: string, profileData: any) => 
     
     return true;
   } catch (error) {
-    console.error('Error saving user profile:', error);
+    logger.error('Error saving user profile:', error);
     throw error;
   }
 };
@@ -247,7 +263,7 @@ export const updateProposalAnalytics = async (
     
     return true;
   } catch (error) {
-    console.error('Error updating proposal analytics:', error);
+    logger.error('Error updating proposal analytics:', error);
     throw error;
   }
 }; 

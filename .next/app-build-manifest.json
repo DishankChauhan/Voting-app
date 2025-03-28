@@ -16,10 +16,15 @@
       "static/chunks/main-app.js",
       "static/chunks/app/proposals/page.js"
     ],
-    "/proposals/[id]/page": [
+    "/delegates/page": [
       "static/chunks/webpack.js",
       "static/chunks/main-app.js",
-      "static/chunks/app/proposals/[id]/page.js"
+      "static/chunks/app/delegates/page.js"
+    ],
+    "/profile/page": [
+      "static/chunks/webpack.js",
+      "static/chunks/main-app.js",
+      "static/chunks/app/profile/page.js"
     ]
   }
 }

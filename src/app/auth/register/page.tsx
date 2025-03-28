@@ -1,19 +1,32 @@
 'use client';
 
-import { useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { useState, useEffect } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { useFirebaseAuth } from '@/context/FirebaseAuthContext';
 import { toast } from 'react-hot-toast';
+import { logger } from '@/utils/logger';
 
 export default function RegisterPage() {
-  const { register, error } = useFirebaseAuth();
+  const { register, error, user } = useFirebaseAuth();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [displayName, setDisplayName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  
+  // Get the redirectUrl if it exists in the query parameters, defaulting to home page
+  const redirectUrl = searchParams.get('redirectUrl') === '/landing' ? '/' : (searchParams.get('redirectUrl') || '/');
+  
+  // If already logged in, redirect to home or the redirect URL
+  useEffect(() => {
+    if (user) {
+      logger.debug('User already logged in, redirecting to', redirectUrl);
+      router.replace(redirectUrl);
+    }
+  }, [user, router, redirectUrl]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -38,11 +51,12 @@ export default function RegisterPage() {
     try {
       await register(email, password, displayName);
       toast.success('Registration successful!');
-      router.push('/');
+      logger.debug('Registration successful, redirecting to', redirectUrl);
+      router.replace(redirectUrl);
     } catch (error: any) {
       const errorMessage = error.message || 'An error occurred during registration';
       toast.error(errorMessage);
-      console.error('Registration error:', error);
+      logger.error('Registration error:', error);
     } finally {
       setIsSubmitting(false);
     }

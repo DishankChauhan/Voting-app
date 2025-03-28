@@ -17,12 +17,20 @@ export default function ProposalsPage() {
     <main className="min-h-screen bg-gradient-to-b from-slate-900 to-slate-800">
       <div className="container mx-auto px-4 py-12">
         <div className="flex justify-between items-center mb-8">
-          <h1 className="text-3xl font-bold text-white">Governance Proposals</h1>
-          <div className="flex items-center space-x-4">
-            <ConnectWallet />
-            <Link href="/" className="text-indigo-400 hover:text-indigo-300 text-sm">
+          <h1 className="text-4xl font-bold text-white">Governance Proposals</h1>
+          <div className="flex items-center gap-4">
+            <Link href="/delegates" className="text-indigo-400 hover:text-indigo-300">
+              View Delegates
+            </Link>
+            <Link href="/" className="text-indigo-400 hover:text-indigo-300">
               Back to Home
             </Link>
+            <button
+              onClick={() => setShowCreateForm(true)}
+              className="bg-indigo-600 hover:bg-indigo-700 text-white font-medium py-2 px-4 rounded transition"
+            >
+              + Create Proposal
+            </button>
           </div>
         </div>
 
