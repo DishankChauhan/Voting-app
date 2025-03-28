@@ -17,3 +17,12 @@ node_modules
 # Hardhat Ignition default folder for deployments against a local node
 ignition/deployments/chain-31337
 .env.local.backup
+
+# Next.js build output
+.next/
+out/
+
+# Local development
+.DS_Store
+*.pem
+.vercel
