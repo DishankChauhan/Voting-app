@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useAuth } from '@/context/AuthContext';
 import ConnectWallet from '../wallet/ConnectWallet';
+import NotificationMenu from '../notification/NotificationMenu';
 
 const Navbar = () => {
   const pathname = usePathname();
@@ -85,7 +86,11 @@ const Navbar = () => {
           </div>
           
           <div className="flex items-center space-x-4">
-            <ConnectWallet />
+            <div className="hidden md:block">
+              <ConnectWallet variant="default" />
+            </div>
+            
+            {user && <NotificationMenu />}
             
             {user ? (
               <div className="hidden md:flex items-center space-x-4">
@@ -180,6 +185,18 @@ const Navbar = () => {
                   Admin
                 </Link>
               )}
+              
+              <div className="py-2">
+                <ConnectWallet fullWidth variant="default" />
+              </div>
+              
+              {user && (
+                <div className="flex items-center space-x-2 py-2">
+                  <NotificationMenu />
+                  <span className="text-sm text-gray-400">Notifications</span>
+                </div>
+              )}
+              
               {user ? (
                 <>
                   <div className="text-sm text-gray-300 py-2">

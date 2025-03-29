@@ -24,6 +24,7 @@ export interface AuthContextType {
   disconnectWallet: () => void;
   logout: () => Promise<void>;
   refreshUser: () => Promise<void>;
+  login: (address: string) => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | null>(null);
@@ -191,6 +192,22 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       }
       
       const address = accounts[0];
+      await login(address);
+    } catch (error: any) {
+      logger.error('Error connecting wallet:', error);
+      
+      if (error.code === 4001) {
+        // User rejected request
+        toast.error('You rejected the connection request');
+      } else {
+        toast.error('Failed to connect wallet');
+      }
+    }
+  };
+
+  // Login with address
+  const login = async (address: string) => {
+    try {
       const firebaseUserStr = localStorage.getItem('firebase-user');
       const firebaseUser = firebaseUserStr ? JSON.parse(firebaseUserStr) : null;
       
@@ -215,15 +232,10 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       
       toast.success('Wallet connected successfully');
       logger.debug('Wallet connected:', { address });
-    } catch (error: any) {
-      logger.error('Error connecting wallet:', error);
-      
-      if (error.code === 4001) {
-        // User rejected request
-        toast.error('You rejected the connection request');
-      } else {
-        toast.error('Failed to connect wallet');
-      }
+    } catch (error) {
+      logger.error('Error in login:', error);
+      toast.error('Failed to connect wallet');
+      throw error;
     }
   };
 
@@ -315,7 +327,8 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
         connectWallet,
         disconnectWallet,
         logout,
-        refreshUser
+        refreshUser,
+        login
       }}
     >
       {children}

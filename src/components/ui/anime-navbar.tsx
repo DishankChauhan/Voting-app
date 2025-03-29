@@ -75,6 +75,11 @@ export function AnimeNavBar({ items = defaultItems, className, defaultActive = "
     return () => window.removeEventListener("resize", handleResize)
   }, [])
 
+  // Don't render on certain paths
+  if (pathname === '/landing' || pathname?.startsWith('/auth/')) {
+    return null;
+  }
+
   if (!mounted) return null
 
   return (

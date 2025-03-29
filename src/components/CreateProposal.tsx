@@ -9,12 +9,27 @@ interface CreateProposalProps {
   onProposalCreated?: () => void;
 }
 
+// Types for proposal options
+type ProposalType = 'standard' | 'multiple-choice';
+type Option = {
+  id: string;
+  text: string;
+};
+
 export default function CreateProposal({ onProposalCreated }: CreateProposalProps) {
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [durationInDays, setDurationInDays] = useState(7);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [tokenBalance, setTokenBalance] = useState<string | null>(null);
+  const [proposalType, setProposalType] = useState<ProposalType>('standard');
+  
+  // For multiple choice proposals
+  const [options, setOptions] = useState<Option[]>([
+    { id: '1', text: '' },
+    { id: '2', text: '' }
+  ]);
+  
   const router = useRouter();
   const { user } = useAuth();
 
@@ -36,6 +51,53 @@ export default function CreateProposal({ onProposalCreated }: CreateProposalProp
     fetchTokenBalance();
   }, [user]);
 
+  const handleOptionChange = (id: string, value: string) => {
+    setOptions(
+      options.map(option => 
+        option.id === id ? { ...option, text: value } : option
+      )
+    );
+  };
+
+  const handleAddOption = () => {
+    if (options.length < 10) { // Limit to 10 options
+      const newOptionId = (options.length + 1).toString();
+      setOptions([...options, { id: newOptionId, text: '' }]);
+    } else {
+      toast.error('Maximum of 10 options allowed');
+    }
+  };
+
+  const handleRemoveOption = (id: string) => {
+    if (options.length > 2) { // Always keep at least 2 options
+      setOptions(options.filter(option => option.id !== id));
+    } else {
+      toast.error('Minimum of 2 options required');
+    }
+  };
+
+  const validateOptions = () => {
+    // Only validate if multiple choice is selected
+    if (proposalType !== 'multiple-choice') return true;
+    
+    // Check if all options have text
+    const emptyOptions = options.filter(option => !option.text.trim());
+    if (emptyOptions.length > 0) {
+      toast.error('All options must have text');
+      return false;
+    }
+    
+    // Check for duplicate options
+    const optionTexts = options.map(option => option.text.trim());
+    const uniqueOptions = new Set(optionTexts);
+    if (uniqueOptions.size !== options.length) {
+      toast.error('Options must be unique');
+      return false;
+    }
+    
+    return true;
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     
@@ -49,6 +111,10 @@ export default function CreateProposal({ onProposalCreated }: CreateProposalProp
       return;
     }
     
+    if (!validateOptions()) {
+      return;
+    }
+    
     setIsSubmitting(true);
     
     try {
@@ -56,15 +122,24 @@ export default function CreateProposal({ onProposalCreated }: CreateProposalProp
       const proposalId = await createProposal(title, description, durationInDays);
       
       if (proposalId > 0) {
+        // Prepare metadata based on proposal type
+        const metadata: any = {
+          createdAt: new Date(),
+          proposalType
+        };
+        
+        // Add options to metadata if multiple choice
+        if (proposalType === 'multiple-choice') {
+          metadata.options = options.map(option => option.text.trim());
+        }
+        
         // Save additional metadata to Firebase
         await saveProposalToFirebase({
           id: proposalId,
           title,
           description,
           proposer: user.walletAddress,
-          metadata: {
-            createdAt: new Date()
-          }
+          metadata
         });
         
         toast.success('Proposal created successfully!');
@@ -76,6 +151,11 @@ export default function CreateProposal({ onProposalCreated }: CreateProposalProp
         setTitle('');
         setDescription('');
         setDurationInDays(7);
+        setProposalType('standard');
+        setOptions([
+          { id: '1', text: '' },
+          { id: '2', text: '' }
+        ]);
         
         // Only redirect if not using callback function
         if (!onProposalCreated) {
@@ -127,6 +207,70 @@ export default function CreateProposal({ onProposalCreated }: CreateProposalProp
             required
           />
         </div>
+        
+        <div className="mb-6">
+          <label className="block text-gray-300 font-medium mb-2">Proposal Type</label>
+          <div className="flex space-x-4">
+            <label className="inline-flex items-center">
+              <input
+                type="radio"
+                className="form-radio text-indigo-600"
+                checked={proposalType === 'standard'}
+                onChange={() => setProposalType('standard')}
+              />
+              <span className="ml-2 text-gray-300">Standard (Yes/No/Abstain)</span>
+            </label>
+            <label className="inline-flex items-center">
+              <input
+                type="radio"
+                className="form-radio text-indigo-600"
+                checked={proposalType === 'multiple-choice'}
+                onChange={() => setProposalType('multiple-choice')}
+              />
+              <span className="ml-2 text-gray-300">Multiple Choice</span>
+            </label>
+          </div>
+        </div>
+        
+        {proposalType === 'multiple-choice' && (
+          <div className="mb-6">
+            <label className="block text-gray-300 font-medium mb-2">Options</label>
+            <div className="space-y-3">
+              {options.map((option) => (
+                <div key={option.id} className="flex items-center space-x-2">
+                  <input
+                    type="text"
+                    className="flex-grow px-4 py-2 rounded bg-gray-800 text-white border border-gray-700 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-900 focus:outline-none"
+                    placeholder={`Option ${option.id}`}
+                    value={option.text}
+                    onChange={(e) => handleOptionChange(option.id, e.target.value)}
+                    required
+                  />
+                  <button
+                    type="button"
+                    onClick={() => handleRemoveOption(option.id)}
+                    className="p-2 rounded-full text-gray-400 hover:text-white hover:bg-gray-700"
+                    title="Remove Option"
+                  >
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                      <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM7 9a1 1 0 000 2h6a1 1 0 100-2H7z" clipRule="evenodd" />
+                    </svg>
+                  </button>
+                </div>
+              ))}
+              <button
+                type="button"
+                onClick={handleAddOption}
+                className="mt-2 inline-flex items-center px-3 py-2 border border-gray-700 rounded-md bg-gray-800 text-gray-300 hover:text-white hover:bg-gray-700"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-1" viewBox="0 0 20 20" fill="currentColor">
+                  <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-11a1 1 0 10-2 0v2H7a1 1 0 100 2h2v2a1 1 0 102 0v-2h2a1 1 0 100-2h-2V7z" clipRule="evenodd" />
+                </svg>
+                Add Option
+              </button>
+            </div>
+          </div>
+        )}
         
         <div className="mb-6">
           <label htmlFor="duration" className="block text-gray-300 font-medium mb-2">Duration (days)</label>

@@ -25,12 +25,6 @@ export default function ProposalsPage() {
             <Link href="/" className="text-indigo-400 hover:text-indigo-300">
               Back to Home
             </Link>
-            <button
-              onClick={() => setShowCreateForm(true)}
-              className="bg-indigo-600 hover:bg-indigo-700 text-white font-medium py-2 px-4 rounded transition"
-            >
-              + Create Proposal
-            </button>
           </div>
         </div>
 

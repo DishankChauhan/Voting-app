@@ -21,6 +21,8 @@ import {
   orderBy,
   deleteDoc,
   arrayUnion,
+  writeBatch,
+  limit,
 } from 'firebase/firestore';
 import { auth, db } from '@/lib/firebase';
 import { ProposalData } from '@/lib/contractConfig';
@@ -108,6 +110,41 @@ interface ProposalComment {
   author: string;
   content: string;
   createdAt: Date;
+}
+
+// Delegation type definition
+export interface Delegation {
+  delegator: string;     // Address of the user delegating votes
+  delegatee: string;     // Address receiving the delegated votes
+  amount: string;        // Amount of votes delegated
+  active: boolean;       // Whether the delegation is currently active
+  timestamp: number;     // When the delegation was created/updated
+}
+
+// Notification types
+export enum NotificationType {
+  PROPOSAL_CREATED = 'PROPOSAL_CREATED',
+  PROPOSAL_VOTE = 'PROPOSAL_VOTE',
+  PROPOSAL_EXECUTED = 'PROPOSAL_EXECUTED',
+  PROPOSAL_CANCELED = 'PROPOSAL_CANCELED',
+  PROPOSAL_EXPIRED = 'PROPOSAL_EXPIRED',
+  DELEGATION_RECEIVED = 'DELEGATION_RECEIVED',
+  DELEGATION_REMOVED = 'DELEGATION_REMOVED',
+  TOKEN_RECEIVED = 'TOKEN_RECEIVED',
+  PROPOSAL_NO_VOTES = 'PROPOSAL_NO_VOTES'
+}
+
+// Notification interface
+export interface Notification {
+  id?: string;                // Auto-generated ID
+  userId: string;             // Address of the user receiving the notification
+  type: NotificationType;     // Type of notification
+  title: string;              // Notification title
+  message: string;            // Notification message
+  linkUrl?: string;           // Optional URL to redirect to when clicked
+  read: boolean;              // Whether the notification has been read
+  timestamp: number;          // When the notification was created
+  data?: any;                 // Additional data related to the notification
 }
 
 // Collection references
@@ -264,6 +301,280 @@ export const updateProposalAnalytics = async (
     return true;
   } catch (error) {
     logger.error('Error updating proposal analytics:', error);
+    throw error;
+  }
+};
+
+/**
+ * Save or update a delegation in Firebase
+ * @param delegation The delegation data to save
+ */
+export const saveDelegation = async (delegation: Delegation): Promise<void> => {
+  try {
+    // Normalize addresses to lowercase for consistency
+    const normalizedDelegation = {
+      ...delegation,
+      delegator: delegation.delegator.toLowerCase(),
+      delegatee: delegation.delegatee.toLowerCase()
+    };
+
+    const delegationRef = doc(db, 'delegations', normalizedDelegation.delegator);
+    await setDoc(delegationRef, normalizedDelegation);
+  } catch (error) {
+    console.error('Error saving delegation:', error);
+    throw error;
+  }
+};
+
+/**
+ * Get an active delegation for a delegator
+ * @param delegatorAddress The address of the delegator
+ * @returns The delegation data or null if not found
+ */
+export const getDelegationByDelegator = async (delegatorAddress: string): Promise<Delegation | null> => {
+  try {
+    const delegationRef = doc(db, 'delegations', delegatorAddress.toLowerCase());
+    const delegationSnap = await getDoc(delegationRef);
+
+    if (delegationSnap.exists()) {
+      return delegationSnap.data() as Delegation;
+    }
+    return null;
+  } catch (error) {
+    console.error('Error getting delegation:', error);
+    throw error;
+  }
+};
+
+/**
+ * Get all delegations to a specific delegatee
+ * @param delegateeAddress The address of the delegatee
+ * @returns Array of active delegations
+ */
+export const getDelegationsToAddress = async (delegateeAddress: string): Promise<Delegation[]> => {
+  try {
+    const delegationsCollection = collection(db, 'delegations');
+    const q = query(
+      delegationsCollection, 
+      where('delegatee', '==', delegateeAddress.toLowerCase()),
+      where('active', '==', true)
+    );
+    
+    const querySnapshot = await getDocs(q);
+    const delegations: Delegation[] = [];
+    
+    querySnapshot.forEach((doc) => {
+      delegations.push(doc.data() as Delegation);
+    });
+    
+    return delegations;
+  } catch (error) {
+    console.error('Error getting delegations to address:', error);
+    throw error;
+  }
+};
+
+/**
+ * Get all active delegations
+ * @returns Array of all active delegations
+ */
+export const getAllActiveDelegations = async (): Promise<Delegation[]> => {
+  try {
+    const delegationsCollection = collection(db, 'delegations');
+    const q = query(delegationsCollection, where('active', '==', true));
+    
+    const querySnapshot = await getDocs(q);
+    const delegations: Delegation[] = [];
+    
+    querySnapshot.forEach((doc) => {
+      delegations.push(doc.data() as Delegation);
+    });
+    
+    return delegations;
+  } catch (error) {
+    console.error('Error getting all active delegations:', error);
+    throw error;
+  }
+};
+
+/**
+ * Create a new notification for a user
+ * @param notification The notification data
+ * @returns The created notification with ID
+ */
+export const createNotification = async (notification: Omit<Notification, 'id'>): Promise<Notification> => {
+  try {
+    const notificationsCollection = collection(db, 'notifications');
+    
+    // Create a new document with auto-generated ID
+    const docRef = await addDoc(notificationsCollection, {
+      ...notification,
+      read: false,
+      timestamp: Date.now()
+    });
+    
+    return {
+      id: docRef.id,
+      ...notification,
+      read: false,
+      timestamp: Date.now()
+    };
+  } catch (error) {
+    console.error('Error creating notification:', error);
+    throw error;
+  }
+};
+
+/**
+ * Get all notifications for a user
+ * @param userId The user address
+ * @param limitCount Optional limit on number of notifications to return
+ * @returns Array of user notifications, sorted by newest first
+ */
+export const getUserNotifications = async (userId: string, limitCount?: number): Promise<Notification[]> => {
+  try {
+    const notificationsCollection = collection(db, 'notifications');
+    let q = query(
+      notificationsCollection,
+      where('userId', '==', userId.toLowerCase()),
+      orderBy('timestamp', 'desc')
+    );
+    
+    if (limitCount) {
+      q = query(q, limit(limitCount));
+    }
+    
+    const querySnapshot = await getDocs(q);
+    const notifications: Notification[] = [];
+    
+    querySnapshot.forEach((doc) => {
+      notifications.push({
+        id: doc.id,
+        ...doc.data()
+      } as Notification);
+    });
+    
+    return notifications;
+  } catch (error) {
+    console.error('Error getting user notifications:', error);
+    throw error;
+  }
+};
+
+/**
+ * Mark a notification as read
+ * @param notificationId The ID of the notification
+ */
+export const markNotificationAsRead = async (notificationId: string): Promise<void> => {
+  try {
+    const notificationRef = doc(db, 'notifications', notificationId);
+    await updateDoc(notificationRef, {
+      read: true
+    });
+  } catch (error) {
+    console.error('Error marking notification as read:', error);
+    throw error;
+  }
+};
+
+/**
+ * Mark all notifications for a user as read
+ * @param userId The user address
+ */
+export const markAllNotificationsAsRead = async (userId: string): Promise<void> => {
+  try {
+    const notificationsCollection = collection(db, 'notifications');
+    const q = query(
+      notificationsCollection,
+      where('userId', '==', userId.toLowerCase()),
+      where('read', '==', false)
+    );
+    
+    const querySnapshot = await getDocs(q);
+    const batch = writeBatch(db);
+    
+    querySnapshot.forEach((doc) => {
+      batch.update(doc.ref, { read: true });
+    });
+    
+    await batch.commit();
+  } catch (error) {
+    console.error('Error marking all notifications as read:', error);
+    throw error;
+  }
+};
+
+/**
+ * Delete a notification
+ * @param notificationId The ID of the notification
+ */
+export const deleteNotification = async (notificationId: string): Promise<void> => {
+  try {
+    const notificationRef = doc(db, 'notifications', notificationId);
+    await deleteDoc(notificationRef);
+  } catch (error) {
+    console.error('Error deleting notification:', error);
+    throw error;
+  }
+};
+
+/**
+ * Create a notification for a proposal with no votes
+ * @param proposalId The ID of the proposal
+ * @param proposalTitle The title of the proposal
+ * @param proposerAddress The address of the proposal creator
+ */
+export const createNoVotesNotification = async (
+  proposalId: number,
+  proposalTitle: string,
+  proposerAddress: string
+): Promise<void> => {
+  try {
+    await createNotification({
+      userId: proposerAddress.toLowerCase(),
+      type: NotificationType.PROPOSAL_NO_VOTES,
+      title: 'No Votes on Your Proposal',
+      message: `Your proposal "${proposalTitle}" has not received any votes. Consider withdrawing it.`,
+      linkUrl: `/proposals/${proposalId}`,
+      read: false,
+      timestamp: Date.now(),
+      data: { proposalId }
+    });
+  } catch (error) {
+    console.error('Error creating no votes notification:', error);
+    throw error;
+  }
+};
+
+// Update proposal with quadratic voting data
+export interface ProposalVote {
+  voter: string;
+  support: number;
+  weight: number;
+  timestamp: number;
+}
+
+/**
+ * Update proposal votes using quadratic voting
+ * @param updatedProposal The updated proposal data with new vote
+ */
+export const updateProposalVotes = async (updatedProposal: ProposalData & { votes?: ProposalVote[] }): Promise<void> => {
+  try {
+    const proposalRef = doc(db, PROPOSALS_COLLECTION, updatedProposal.id.toString());
+    
+    // Make sure votes exist in the data structure
+    const votes = updatedProposal.votes || [];
+    
+    await updateDoc(proposalRef, {
+      forVotes: updatedProposal.forVotes,
+      againstVotes: updatedProposal.againstVotes,
+      abstainVotes: updatedProposal.abstainVotes,
+      votes: votes
+    });
+    
+    logger.debug(`Updated votes for proposal ${updatedProposal.id}`);
+  } catch (error) {
+    logger.error('Error updating proposal votes:', error);
     throw error;
   }
 }; 

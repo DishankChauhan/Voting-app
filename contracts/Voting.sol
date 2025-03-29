@@ -4,6 +4,7 @@ pragma solidity ^0.8.9;
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/utils/math/Math.sol";
+import "./ZKVerifier.sol";
 
 /**
  * @title Enhanced Voting Contract for DAO Governance
@@ -14,6 +15,12 @@ contract Voting is Ownable {
 
     // Governance token for voting weight
     IERC20 public governanceToken;
+    
+    // ZK verifier for private voting
+    ZKVerifier public zkVerifier;
+    
+    // Flag to enable/disable private voting
+    bool public privateVotingEnabled = false;
     
     // Minimum token balance required to create a proposal
     uint256 public proposalThreshold;
@@ -58,11 +65,12 @@ contract Voting is Ownable {
         mapping(address => Receipt) receipts; // Voting receipts
     }
 
-    // Structure for a vote receipt
+    // Structure for a vote receipt with privacy
     struct Receipt {
         bool hasVoted;
         uint8 support; // 0=against, 1=for, 2=abstain
         uint256 votes;
+        bool isPrivate; // Whether this was a private vote
     }
 
     // Public proposal count
@@ -101,6 +109,12 @@ contract Voting is Ownable {
     event DelegateChanged(address indexed delegator, address indexed fromDelegate, address indexed toDelegate);
     event QuorumUpdated(uint256 oldQuorum, uint256 newQuorum);
     event ProposalThresholdUpdated(uint256 oldThreshold, uint256 newThreshold);
+    event PrivateVoteCast(
+        address indexed voter,
+        uint256 indexed proposalId,
+        bytes32 voteHash
+    );
+    event PrivateVotingToggled(bool enabled);
 
     /**
      * @dev Constructor to initialize the voting contract
@@ -118,6 +132,9 @@ contract Voting is Ownable {
         governanceToken = IERC20(_governanceToken);
         proposalThreshold = _proposalThreshold;
         quorumVotes = _quorumVotes;
+        
+        // Create and set the ZK verifier
+        zkVerifier = new ZKVerifier();
     }
 
     /**
@@ -209,19 +226,39 @@ contract Voting is Ownable {
      * @dev Execute a successful proposal
      * @param _proposalId ID of the proposal to execute
      */
-    function executeProposal(uint256 _proposalId) public {
+    function executeProposal(uint256 _proposalId) external {
         require(_proposalId <= proposalCount, "Invalid proposal ID");
         
         Proposal storage proposal = proposals[_proposalId];
         
-        require(state(_proposalId) == ProposalState.Succeeded, "Proposal can't be executed");
+        require(state(_proposalId) == ProposalState.Succeeded, "Proposal not successful");
+        require(!proposal.executed, "Proposal already executed");
         
         proposal.executed = true;
         
         emit ProposalExecuted(_proposalId);
+    }
+
+    /**
+     * @dev Execute a proposal with additional transaction data
+     * @param _proposalId ID of the proposal to execute
+     * @param _transactionData The encoded transaction data to execute
+     */
+    function executeProposalWithData(uint256 _proposalId, bytes memory _transactionData) external {
+        require(_proposalId <= proposalCount, "Invalid proposal ID");
         
-        // In a production application, this is where you'd implement
-        // the actual execution logic (e.g., call smart contracts, transfer funds)
+        Proposal storage proposal = proposals[_proposalId];
+        
+        require(state(_proposalId) == ProposalState.Succeeded, "Proposal not successful");
+        require(!proposal.executed, "Proposal already executed");
+        
+        proposal.executed = true;
+        
+        // Execute the transaction with the provided data
+        (bool success, ) = address(this).call(_transactionData);
+        require(success, "Transaction execution failed");
+        
+        emit ProposalExecuted(_proposalId);
     }
 
     /**
@@ -422,5 +459,62 @@ contract Voting is Ownable {
      */
     function setGracePeriod(uint256 _newGracePeriod) public onlyOwner {
         gracePeriod = _newGracePeriod;
+    }
+
+    /**
+     * @dev Toggle private voting mode
+     * @param _enabled Whether private voting should be enabled
+     */
+    function togglePrivateVoting(bool _enabled) external onlyOwner {
+        privateVotingEnabled = _enabled;
+        emit PrivateVotingToggled(_enabled);
+    }
+    
+    /**
+     * @dev Set a custom ZK verifier contract
+     * @param _verifier Address of the ZK verifier contract
+     */
+    function setZKVerifier(address _verifier) external onlyOwner {
+        require(_verifier != address(0), "Verifier cannot be zero address");
+        zkVerifier = ZKVerifier(_verifier);
+    }
+    
+    /**
+     * @dev Cast a private vote using ZK-SNARKs
+     * @param _proposalId Proposal ID
+     * @param _voteHash Hash of the vote (commitment)
+     * @param _proof ZK proof components
+     * @param _inputs Public inputs for the proof verification
+     */
+    function castPrivateVote(
+        uint256 _proposalId,
+        bytes32 _voteHash,
+        ZKVerifier.Proof memory _proof,
+        uint256[] memory _inputs
+    ) public {
+        require(privateVotingEnabled, "Private voting is not enabled");
+        require(_proposalId <= proposalCount, "Invalid proposal ID");
+        
+        Proposal storage proposal = proposals[_proposalId];
+        Receipt storage receipt = proposal.receipts[msg.sender];
+        
+        require(state(_proposalId) == ProposalState.Active, "Proposal not active");
+        require(!receipt.hasVoted, "Already voted");
+        
+        // Verify the zero-knowledge proof
+        bool isValidProof = zkVerifier.verifyProof(_proposalId, _proof, _inputs);
+        require(isValidProof, "Invalid zero-knowledge proof");
+        
+        // Mark that the user has voted without revealing their choice
+        receipt.hasVoted = true;
+        receipt.isPrivate = true;
+        
+        // The actual vote values are not stored on-chain
+        // Vote tallying will happen off-chain based on the commitments
+        
+        // Record last vote time to prevent quick selling after voting
+        lastVoteTime[msg.sender] = block.timestamp;
+        
+        emit PrivateVoteCast(msg.sender, _proposalId, _voteHash);
     }
 } 

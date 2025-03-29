@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useAuth } from '@/context/AuthContext';
 import { toast } from 'react-hot-toast';
-import { castVote, getVotingPower, ProposalState, ContractServiceError, ContractErrorType } from '@/services/contractService';
+import { castQuadraticVote, getVotingPower, ProposalState, ContractServiceError, ContractErrorType } from '@/services/contractService';
 import { validateVoteCast, VoteType, getVoteButtonText, getTimeRemaining } from '@/utils/voteValidation';
 import { logger } from '@/utils/logger';
 
@@ -12,6 +12,8 @@ interface VotingInterfaceProps {
   hasUserVoted: boolean;
   onVoteSuccess?: () => void;
   className?: string;
+  proposalType?: string;
+  options?: string[];
 }
 
 /**
@@ -23,10 +25,13 @@ const VotingInterface = ({
   endTime,
   hasUserVoted,
   onVoteSuccess,
-  className = ''
+  className = '',
+  proposalType = 'standard',
+  options = []
 }: VotingInterfaceProps) => {
   const { user } = useAuth();
   const [selectedVote, setSelectedVote] = useState<VoteType | null>(null);
+  const [selectedOptionIndex, setSelectedOptionIndex] = useState<number | null>(null);
   const [isVoting, setIsVoting] = useState(false);
   const [timeRemaining, setTimeRemaining] = useState<string>('');
   const [votingPower, setVotingPower] = useState<string>('0');
@@ -89,23 +94,48 @@ const VotingInterface = ({
     }
   }, [user?.walletAddress, votingPower, hasUserVoted, proposalState]);
 
-  // Handle vote selection
+  // Handle vote selection for standard voting
   const handleVoteSelect = (voteType: VoteType) => {
     if (!canVote) return;
     setSelectedVote(voteType);
   };
 
+  // Handle option selection for multiple choice voting
+  const handleOptionSelect = (optionIndex: number) => {
+    if (!canVote) return;
+    setSelectedOptionIndex(optionIndex);
+  };
+
   // Handle vote submission
   const handleVoteSubmit = async () => {
-    if (!selectedVote || !user?.walletAddress || !canVote) return;
+    if (!user?.walletAddress || !canVote) return;
+    
+    // For standard voting, ensure a vote type is selected
+    if (proposalType === 'standard' && selectedVote === null) {
+      toast.error('Please select a voting option');
+      return;
+    }
+    
+    // For multiple choice voting, ensure an option is selected
+    if (proposalType === 'multiple-choice' && selectedOptionIndex === null) {
+      toast.error('Please select an option');
+      return;
+    }
 
     setIsVoting(true);
     try {
-      logger.debug('Casting vote', { proposalId, voteType: selectedVote });
-      await castVote(parseInt(proposalId), selectedVote);
+      if (proposalType === 'standard' && selectedVote !== null) {
+        logger.debug('Casting standard vote', { proposalId, voteType: selectedVote });
+        await castQuadraticVote(parseInt(proposalId), selectedVote);
+      } else if (proposalType === 'multiple-choice' && selectedOptionIndex !== null) {
+        logger.debug('Casting multiple choice vote', { proposalId, optionIndex: selectedOptionIndex });
+        // Cast vote with the selected option index + 1 (since contract expects 1-based indexing)
+        await castQuadraticVote(parseInt(proposalId), selectedOptionIndex);
+      }
       
       toast.success('Vote cast successfully!');
       setSelectedVote(null);
+      setSelectedOptionIndex(null);
       
       // Call onVoteSuccess callback if provided
       if (onVoteSuccess) {
@@ -169,6 +199,36 @@ const VotingInterface = ({
           {iconSvg}
         </div>
         <span className="font-medium">{label}</span>
+      </div>
+    );
+  };
+  
+  // Render multiple choice option button
+  const renderOptionButton = (optionText: string, index: number) => {
+    const isSelected = selectedOptionIndex === index;
+    const baseClasses = 
+      'w-full flex justify-between items-center p-4 rounded-lg transition-all duration-200 border-2 mb-2';
+    
+    const selectedClass = 'bg-indigo-900/30 border-indigo-500 text-indigo-400 ring-indigo-500/30 ring-4';
+    const defaultClass = 'border-gray-700 hover:border-indigo-500 text-gray-300 hover:text-indigo-400 hover:bg-indigo-900/20';
+    
+    const classes = `${baseClasses} ${isSelected ? selectedClass : defaultClass} ${!canVote ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`;
+
+    return (
+      <div 
+        key={index}
+        className={classes}
+        onClick={() => canVote && handleOptionSelect(index)}
+        role="button"
+        aria-pressed={isSelected}
+        tabIndex={0}
+      >
+        <span className="font-medium">{optionText}</span>
+        {isSelected && (
+          <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+          </svg>
+        )}
       </div>
     );
   };
@@ -247,35 +307,50 @@ const VotingInterface = ({
         </div>
       )}
 
-      <div className="grid grid-cols-3 gap-3 mb-4">
-        {renderVoteButton(VoteType.For, 'For', forIcon)}
-        {renderVoteButton(VoteType.Against, 'Against', againstIcon)}
-        {renderVoteButton(VoteType.Abstain, 'Abstain', abstainIcon)}
-      </div>
+      {proposalType === 'standard' ? (
+        // Standard voting interface with For/Against/Abstain options
+        <div className="grid grid-cols-3 gap-3 mb-4">
+          {renderVoteButton(VoteType.For, 'For', forIcon)}
+          {renderVoteButton(VoteType.Against, 'Against', againstIcon)}
+          {renderVoteButton(VoteType.Abstain, 'Abstain', abstainIcon)}
+        </div>
+      ) : (
+        // Multiple choice voting interface
+        <div className="mb-4">
+          <p className="text-gray-400 text-sm mb-3">Select one of the following options:</p>
+          <div className="space-y-2">
+            {options.map((option, index) => 
+              renderOptionButton(option, index)
+            )}
+          </div>
+        </div>
+      )}
+      
+      <button
+        onClick={handleVoteSubmit}
+        disabled={
+          isVoting || 
+          !canVote || 
+          (proposalType === 'standard' && selectedVote === null) || 
+          (proposalType === 'multiple-choice' && selectedOptionIndex === null)
+        }
+        className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-4 rounded focus:outline-none focus:shadow-outline transition-colors duration-200 ease-in-out disabled:opacity-50 disabled:cursor-not-allowed"
+      >
+        {isVoting 
+          ? 'Confirming Vote...' 
+          : (proposalType === 'standard' && selectedVote !== null)
+            ? `Vote ${getVoteButtonText(selectedVote)}`
+            : (proposalType === 'multiple-choice' && selectedOptionIndex !== null)
+              ? 'Confirm Vote'
+              : 'Cast Your Vote'
+        }
+      </button>
       
       {timeRemaining && (
-        <p className="text-gray-500 text-sm mb-4">
+        <p className="mt-4 text-center text-gray-500 text-sm">
           {timeRemaining}
         </p>
       )}
-
-      <button
-        onClick={handleVoteSubmit}
-        disabled={isVoting || !selectedVote || !canVote}
-        className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-medium py-3 px-4 rounded-md transition disabled:opacity-50 disabled:cursor-not-allowed"
-      >
-        {isVoting ? (
-          <div className="flex items-center justify-center">
-            <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-            </svg>
-            Processing Vote...
-          </div>
-        ) : (
-          selectedVote !== null ? getVoteButtonText(selectedVote) : 'Select an option'
-        )}
-      </button>
     </div>
   );
 };

@@ -6,6 +6,8 @@ import { Toaster } from 'react-hot-toast';
 import { ThemeProvider } from 'next-themes';
 import './globals.css';
 import { AnimeNavBar } from '@/components/ui/anime-navbar';
+import { ScheduledTasksProvider } from '@/utils/scheduledTasks';
+import Navbar from '@/components/layout/Navbar';
 
 const inter = Inter({ subsets: ['latin'] });
 
@@ -25,11 +27,14 @@ export default function RootLayout({
         <FirebaseAuthProvider>
           <AuthProvider>
             <ThemeProvider attribute="class" defaultTheme="dark" enableSystem>
-              <main className="min-h-screen">
-                <AnimeNavBar />
-                {children}
-                <Toaster position="bottom-right" />
-              </main>
+              <ScheduledTasksProvider>
+                <main className="min-h-screen">
+                  <AnimeNavBar />
+                  <Navbar />
+                  {children}
+                  <Toaster position="bottom-right" />
+                </main>
+              </ScheduledTasksProvider>
             </ThemeProvider>
           </AuthProvider>
         </FirebaseAuthProvider>

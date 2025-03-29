@@ -11,6 +11,7 @@ import {
 } from '@/lib/contractConfig';
 import logger from '@/utils/logger';
 import { getContract } from './web3Service';
+import { getProposalFromFirebase } from './firebaseService';
 
 // Error types for better error classification
 export enum ContractErrorType {
@@ -267,79 +268,135 @@ export const getTokenBalance = async (address: string): Promise<string> => {
   }
 };
 
-// Get all proposals
-export const getProposals = async (): Promise<Proposal[]> => {
+// Get a single proposal by ID
+export const getProposal = async (proposalId: number, userAddress?: string | null): Promise<any> => {
   try {
-    if (!VOTING_CONTRACT_ADDRESS) {
+    logger.debug(`Getting proposal ${proposalId}`);
+    
+    if (isNaN(proposalId) || proposalId <= 0) {
       throw new ContractServiceError(
-        'Voting contract address is not configured. Please deploy the contract first',
-        ContractErrorType.CONTRACT_ERROR
+        'Invalid proposal ID. Must be a positive number',
+        ContractErrorType.INVALID_ADDRESS
       );
     }
     
-    const contract = await getContracts().then(contracts => contracts.votingContract);
+    const { votingContract } = await getContracts();
+    
+    // Get proposal details from contract
+    try {
+      const [
+        title,
+        description,
+        forVotes,
+        againstVotes,
+        abstainVotes,
+        startTime,
+        endTime,
+        currentState
+      ] = await (votingContract as any).getProposal(proposalId);
+      
+      // Get user's vote on this proposal if user address is provided
+      let hasVoted = false;
+      let userVote = 0;
+      let userVoteWeight = 0;
+      
+      if (userAddress && ethers.isAddress(userAddress) && userAddress !== ethers.ZeroAddress) {
+        try {
+          const [voted, vote, weight] = await (votingContract as any).hasVoted(proposalId, userAddress);
+          hasVoted = voted;
+          userVote = Number(vote);
+          userVoteWeight = Number(ethers.formatUnits(weight, 18));
+        } catch (voteError) {
+          logger.warn(`Error fetching user vote for proposal ${proposalId}:`, voteError);
+          // Continue without user vote data
+        }
+      }
+      
+      // Get proposer from Firebase or other metadata source if needed
+      let proposer = '';
+      try {
+        const firebaseData = await getProposalFromFirebase(proposalId);
+        if (firebaseData && firebaseData.proposer) {
+          proposer = firebaseData.proposer;
+        }
+      } catch (metadataError) {
+        logger.warn(`Error fetching proposal metadata for ${proposalId}:`, metadataError);
+        // Continue without metadata
+      }
+      
+      // Check if a proposal in Succeeded state has expired (passed but not executed)
+      let isExpired = false;
+      if (Number(currentState) === ProposalState.Succeeded) {
+        // Get the execution deadline (7 days after voting ends)
+        const now = new Date();
+        const executionDeadline = new Date(Number(endTime) * 1000);
+        executionDeadline.setDate(executionDeadline.getDate() + 7);
+        
+        isExpired = now > executionDeadline;
+      }
+      
+      return {
+        id: proposalId,
+        title,
+        description,
+        proposer,
+        forVotes: Number(ethers.formatUnits(forVotes, 18)),
+        againstVotes: Number(ethers.formatUnits(againstVotes, 18)),
+        abstainVotes: Number(ethers.formatUnits(abstainVotes, 18)),
+        startTime: new Date(Number(startTime) * 1000),
+        endTime: new Date(Number(endTime) * 1000),
+        state: Number(currentState),
+        hasVoted,
+        userVote,
+        userVoteWeight,
+        isExpired
+      };
+    } catch (error) {
+      logger.error(`Error fetching proposal ${proposalId} from contract:`, error);
+      throw new ContractServiceError(
+        `Proposal with ID ${proposalId} not found or inaccessible`,
+        ContractErrorType.CONTRACT_ERROR,
+        error
+      );
+    }
+  } catch (error) {
+    logger.error(`Error getting proposal ${proposalId}:`, error);
+    
+    if (error instanceof ContractServiceError) {
+      throw error;
+    }
+    
+    throw classifyError(error);
+  }
+};
+
+// Update the getProposals function to use our new getProposal function
+export const getProposals = async (): Promise<any[]> => {
+  try {
+    logger.debug('Getting all proposals');
+    
+    const { votingContract } = await getContracts();
     
     // Try to get user address, but don't fail if not available
-    let userAddress: string;
+    let userAddress: string | null = null;
     try {
-      userAddress = (await (await getSigner()).getAddress()).toLowerCase();
+      const signer = await getSigner();
+      userAddress = await signer.getAddress();
     } catch (error) {
       // If user isn't connected, we'll still show proposals but without user vote info
       logger.warn('Unable to get user address for proposal query:', error);
-      userAddress = ethers.ZeroAddress;
+      userAddress = null;
     }
     
     // Get total number of proposals
-    const count = await contract.getProposalCount();
-    const proposals: Proposal[] = [];
+    const count = await (votingContract as any).getProposalCount();
+    const proposals: any[] = [];
     
     // Fetch each proposal
     for (let i = 1; i <= count; i++) {
       try {
-        // Get proposal details
-        const [
-          title,
-          description,
-          forVotes,
-          againstVotes,
-          abstainVotes,
-          startTime,
-          endTime,
-          currentState
-        ] = await contract.getProposal(i);
-        
-        // Get user's vote on this proposal, only if we have a valid user address
-        let hasVoted = false;
-        let userVote = 0;
-        let userVoteWeight = 0;
-        
-        if (userAddress !== ethers.ZeroAddress) {
-          try {
-            const [voted, vote, weight] = await contract.hasVoted(i, userAddress);
-            hasVoted = voted;
-            userVote = Number(vote);
-            userVoteWeight = Number(ethers.formatEther(weight));
-          } catch (voteError) {
-            logger.warn(`Error fetching user vote for proposal ${i}:`, voteError);
-            // Continue without user vote data
-          }
-        }
-        
-        proposals.push({
-          id: i,
-          title,
-          description,
-          proposer: '', // We could get this by listening to events, but omitting for simplicity
-          forVotes: Number(ethers.formatEther(forVotes)),
-          againstVotes: Number(ethers.formatEther(againstVotes)),
-          abstainVotes: Number(ethers.formatEther(abstainVotes)),
-          startTime: new Date(Number(startTime) * 1000),
-          endTime: new Date(Number(endTime) * 1000),
-          state: Number(currentState),
-          hasVoted,
-          userVote: Number(userVote),
-          userVoteWeight: Number(userVoteWeight)
-        });
+        const proposal = await getProposal(i, userAddress);
+        proposals.push(proposal);
       } catch (proposalError) {
         logger.error(`Error fetching proposal ${i}:`, proposalError);
         // Continue to next proposal rather than failing the entire request
@@ -349,6 +406,69 @@ export const getProposals = async (): Promise<Proposal[]> => {
     return proposals;
   } catch (error) {
     logger.error('Error getting proposals:', error);
+    
+    if (error instanceof ContractServiceError) {
+      throw error;
+    }
+    
+    throw classifyError(error);
+  }
+};
+
+// Check if a proposal has expired
+export const checkProposalExpiration = async (proposalId: number): Promise<boolean> => {
+  try {
+    logger.debug(`Checking expiration for proposal ${proposalId}`);
+    
+    const proposal = await getProposal(proposalId);
+    return proposal.isExpired === true;
+  } catch (error) {
+    logger.error(`Error checking proposal expiration:`, error);
+    
+    if (error instanceof ContractServiceError) {
+      throw error;
+    }
+    
+    throw classifyError(error);
+  }
+};
+
+// Expire a proposal that passed but wasn't executed within the timeframe
+export const expireProposal = async (proposalId: number): Promise<boolean> => {
+  try {
+    logger.debug(`Expiring proposal ${proposalId}`);
+    
+    // Verify the proposal is actually eligible for expiration
+    const isExpired = await checkProposalExpiration(proposalId);
+    
+    if (!isExpired) {
+      throw new ContractServiceError(
+        'This proposal is not eligible for expiration',
+        ContractErrorType.CONTRACT_ERROR
+      );
+    }
+    
+    const { votingContract } = await getSignerContracts();
+    
+    // Call the contract's expireProposal function
+    try {
+      const tx = await (votingContract as any).expireProposal(proposalId);
+      await tx.wait();
+      
+      logger.debug(`Proposal ${proposalId} expired successfully`);
+      return true;
+    } catch (contractError) {
+      // If the contract doesn't have a dedicated expireProposal function,
+      // we might need to use a generic update function or throw an error
+      logger.error('Contract does not support the expireProposal function', contractError);
+      throw new ContractServiceError(
+        'The contract does not support proposal expiration',
+        ContractErrorType.CONTRACT_ERROR,
+        contractError
+      );
+    }
+  } catch (error) {
+    logger.error(`Error expiring proposal:`, error);
     
     if (error instanceof ContractServiceError) {
       throw error;
@@ -448,63 +568,87 @@ export const createProposal = async (
   }
 };
 
-// Vote on a proposal
-export const castVote = async (proposalId: number, support: VoteType): Promise<void> => {
+// Cast a vote on a proposal with quadratic voting (power = sqrt(tokens))
+export const castQuadraticVote = async (proposalId: number, support: VoteType): Promise<boolean> => {
   try {
-    if (isNaN(proposalId) || proposalId <= 0) {
+    logger.debug(`Casting quadratic vote on proposal ${proposalId}`);
+    
+    const { votingContract, tokenContract, signer } = await getSignerContracts();
+    const tokenContractAny = tokenContract as any;
+    const votingContractAny = votingContract as any;
+    const voterAddress = await signer.getAddress();
+    
+    // Get user's token balance
+    const balance = await tokenContractAny.balanceOf(voterAddress);
+    
+    if (balance.isZero()) {
       throw new ContractServiceError(
-        'Invalid proposal ID. Must be a positive number',
-        ContractErrorType.INVALID_ADDRESS
+        'You need governance tokens to vote',
+        ContractErrorType.INSUFFICIENT_FUNDS
       );
     }
     
-    if (![VoteType.For, VoteType.Against, VoteType.Abstain].includes(support)) {
+    // Calculate quadratic voting power (sqrt of token balance)
+    // Note: We use fixed-point math with 18 decimals for token balance
+    const tokenBalance = parseFloat(ethers.formatUnits(balance, 18));
+    const quadraticPower = Math.floor(Math.sqrt(tokenBalance) * 100) / 100; // Keep 2 decimal places
+    
+    // We'll use a custom implementation of quadratic voting using Firebase
+    const { getProposalFromFirebase, updateProposalVotes } = await import('./firebaseService');
+    
+    // First check if user has already voted
+    const hasVoted = await votingContractAny.hasVoted(proposalId, voterAddress);
+    
+    if (hasVoted[0]) {
       throw new ContractServiceError(
-        'Invalid vote type. Must be 0 (Against), 1 (For), or 2 (Abstain)',
-        ContractErrorType.INVALID_ADDRESS
+        'You have already voted on this proposal',
+        ContractErrorType.CONTRACT_ERROR
       );
     }
     
-    const contract = await getSignerContracts().then(contracts => contracts.votingContract);
+    // Get current proposal data
+    const proposal = await getProposalFromFirebase(proposalId);
     
-    // Check if the proposal exists and is active
-    try {
-      const proposals = await getProposals();
-      const proposal = proposals.find(p => p.id === proposalId);
-      
-      if (!proposal) {
-        throw new ContractServiceError(
-          `Proposal with ID ${proposalId} does not exist`,
-          ContractErrorType.INVALID_ADDRESS
-        );
-      }
-      
-      if (proposal.state !== ProposalState.Active) {
-        throw new ContractServiceError(
-          `Cannot vote on proposal: ${getProposalStateText(proposal.state)}`,
-          ContractErrorType.CONTRACT_ERROR
-        );
-      }
-      
-      if (proposal.hasVoted) {
-        throw new ContractServiceError(
-          'You have already voted on this proposal',
-          ContractErrorType.CONTRACT_ERROR
-        );
-      }
-    } catch (checkError) {
-      if (checkError instanceof ContractServiceError) {
-        throw checkError;
-      }
-      logger.warn('Error checking proposal status:', checkError);
-      // Continue anyway, the contract will revert if there's an issue
+    if (!proposal) {
+      throw new ContractServiceError(
+        'Proposal not found',
+        ContractErrorType.CONTRACT_ERROR
+      );
     }
     
-    // Cast the vote
-    const tx = await (contract as any).castVote(proposalId, support);
+    // Update vote counts based on support type
+    let updatedProposal = { ...proposal };
+    
+    if (support === VoteType.For) {
+      updatedProposal.forVotes += quadraticPower;
+    } else if (support === VoteType.Against) {
+      updatedProposal.againstVotes += quadraticPower;
+    } else if (support === VoteType.Abstain) {
+      updatedProposal.abstainVotes += quadraticPower;
+    }
+    
+    // Save the user's vote using type assertion
+    const proposalWithVotes = updatedProposal as any;
+    proposalWithVotes.votes = proposalWithVotes.votes || [];
+    proposalWithVotes.votes.push({
+      voter: voterAddress,
+      support,
+      weight: quadraticPower,
+      timestamp: Date.now()
+    });
+    
+    // Save updated proposal
+    await updateProposalVotes(proposalWithVotes);
+    
+    // Also cast a vote on the blockchain for compatibility, but it won't use the quadratic weight
+    // This maintains blockchain voting state for analytics and contract state tracking
+    const tx = await votingContractAny.castVote(proposalId, support);
     await tx.wait();
+    
+    logger.debug(`Successfully cast quadratic vote on proposal ${proposalId}`);
+    return true;
   } catch (error) {
-    logger.error(`Error voting on proposal ${proposalId}:`, error);
+    logger.error(`Error casting quadratic vote on proposal ${proposalId}:`, error);
     
     if (error instanceof ContractServiceError) {
       throw error;
@@ -529,9 +673,11 @@ const getProposalStateText = (state: ProposalState): string => {
   return states[state] || 'Unknown';
 };
 
-// Execute a proposal
-export const executeProposal = async (proposalId: number): Promise<void> => {
+// Enhanced on-chain proposal execution with transaction verification
+export const executeProposalOnChain = async (proposalId: number, transactionData?: string): Promise<boolean> => {
   try {
+    logger.debug(`Executing proposal ${proposalId} on-chain`);
+    
     if (isNaN(proposalId) || proposalId <= 0) {
       throw new ContractServiceError(
         'Invalid proposal ID. Must be a positive number',
@@ -539,39 +685,115 @@ export const executeProposal = async (proposalId: number): Promise<void> => {
       );
     }
     
-    const contract = await getSignerContracts().then(contracts => contracts.votingContract);
+    // Check proposal state first
+    const proposal = await getProposal(proposalId);
     
-    // Check if the proposal exists and can be executed
-    try {
-      const proposals = await getProposals();
-      const proposal = proposals.find(p => p.id === proposalId);
-      
-      if (!proposal) {
-        throw new ContractServiceError(
-          `Proposal with ID ${proposalId} does not exist`,
-          ContractErrorType.INVALID_ADDRESS
-        );
-      }
-      
-      if (proposal.state !== ProposalState.Succeeded) {
-        throw new ContractServiceError(
-          `Cannot execute proposal: ${getProposalStateText(proposal.state)}. Only Succeeded proposals can be executed`,
-          ContractErrorType.CONTRACT_ERROR
-        );
-      }
-    } catch (checkError) {
-      if (checkError instanceof ContractServiceError) {
-        throw checkError;
-      }
-      logger.warn('Error checking proposal status:', checkError);
-      // Continue anyway, the contract will revert if there's an issue
+    if (!proposal) {
+      throw new ContractServiceError(
+        `Proposal with ID ${proposalId} not found`,
+        ContractErrorType.INVALID_ADDRESS
+      );
     }
     
-    // Execute the proposal
-    const tx = await (contract as any).executeProposal(proposalId);
-    await tx.wait();
+    if (proposal.state !== ProposalState.Succeeded) {
+      throw new ContractServiceError(
+        `Cannot execute proposal: ${getProposalStateText(proposal.state)}. Only Succeeded proposals can be executed`,
+        ContractErrorType.CONTRACT_ERROR
+      );
+    }
+    
+    if (proposal.isExpired) {
+      throw new ContractServiceError(
+        'This proposal has expired and cannot be executed',
+        ContractErrorType.CONTRACT_ERROR
+      );
+    }
+    
+    const { votingContract, signer } = await getSignerContracts();
+    const userAddress = await signer.getAddress();
+    
+    // Verify executor permissions (if needed)
+    // This is an optional step depending on your governance design
+    try {
+      // Example: Check if user has execution role or is contract owner
+      const isExecutor = await (votingContract as any).hasRole(
+        await (votingContract as any).EXECUTOR_ROLE(),
+        userAddress
+      );
+      
+      if (!isExecutor) {
+        // If specific role check fails, check if user has minimum tokens for execution
+        const minTokensToExecute = ethers.parseEther("10"); // Example: 10 tokens
+        const { tokenContract } = await getContracts();
+        const balance = await tokenContract.balanceOf(userAddress);
+        
+        if (balance < minTokensToExecute) {
+          throw new ContractServiceError(
+            'You need at least 10 tokens to execute proposals',
+            ContractErrorType.INSUFFICIENT_PERMISSIONS
+          );
+        }
+      }
+    } catch (permissionError) {
+      // If the specific role check fails but it's just because the contract doesn't 
+      // have that function, continue anyway - the contract will revert if not permitted
+      logger.warn('Error checking execution permissions:', permissionError);
+    }
+    
+    // Execute the proposal with optional transaction data
+    // This allows for more complex on-chain actions
+    let tx;
+    if (transactionData) {
+      // If transaction data is provided, use it for more complex execution
+      tx = await (votingContract as any).executeProposalWithData(proposalId, transactionData);
+    } else {
+      // Use standard execution
+      tx = await (votingContract as any).executeProposal(proposalId);
+    }
+    
+    // Wait for confirmation
+    const receipt = await tx.wait();
+    
+    // Verify success through events
+    const successEvent = receipt.logs
+      .find((log: any) => {
+        try {
+          const parsedLog = (votingContract as any).interface.parseLog({
+            topics: [...log.topics],
+            data: log.data,
+          });
+          return parsedLog?.name === 'ProposalExecuted';
+        } catch {
+          return false;
+        }
+      });
+    
+    if (!successEvent) {
+      logger.warn('Proposal execution transaction succeeded but no success event found');
+    }
+    
+    // Update Firebase record
+    try {
+      const { getProposalFromFirebase, updateProposalVotes } = await import('./firebaseService');
+      const firebaseProposal = await getProposalFromFirebase(proposalId);
+      if (firebaseProposal) {
+        // Mark as executed in Firebase
+        const updatedProposal = {
+          ...firebaseProposal,
+          executed: true,
+          executedAt: Date.now(),
+          executor: userAddress
+        };
+        await updateProposalVotes(updatedProposal);
+      }
+    } catch (firebaseError) {
+      logger.warn('Error updating Firebase after execution:', firebaseError);
+    }
+    
+    logger.debug(`Proposal ${proposalId} executed successfully on-chain`);
+    return true;
   } catch (error) {
-    logger.error(`Error executing proposal ${proposalId}:`, error);
+    logger.error(`Error executing proposal ${proposalId} on-chain:`, error);
     
     if (error instanceof ContractServiceError) {
       throw error;
@@ -633,49 +855,91 @@ export const cancelProposal = async (proposalId: number): Promise<void> => {
   }
 };
 
-// Delegate votes to another address
-export const delegateVotes = async (delegateeAddress: string): Promise<void> => {
+// Get delegation status for a user
+export const getDelegationStatus = async (address: string): Promise<{ isDelegating: boolean; delegatedTo: string; votingPower: string }> => {
   try {
-    if (!ethers.isAddress(delegateeAddress)) {
+    logger.debug('Getting delegation status for:', address);
+    
+    if (!ethers.isAddress(address)) {
       throw new ContractServiceError(
-        'Invalid delegate address format',
+        'Invalid address format',
         ContractErrorType.INVALID_ADDRESS
       );
     }
     
-    // Get user address to check if trying to self-delegate
-    const signer = await getSigner();
-    const userAddress = await signer.getAddress();
+    const { tokenContract } = await getContracts();
+    const tokenContractAny = tokenContract as any;
     
-    if (delegateeAddress.toLowerCase() === userAddress.toLowerCase()) {
-      throw new ContractServiceError(
-        'You cannot delegate votes to yourself',
-        ContractErrorType.INVALID_ADDRESS
-      );
-    }
+    // Default values
+    const result = {
+      isDelegating: false,
+      delegatedTo: ethers.ZeroAddress,
+      votingPower: '0'
+    };
     
-    // Check if user has any tokens to delegate
     try {
-      const balance = await getTokenBalance(userAddress);
-      if (parseFloat(balance) <= 0) {
-        throw new ContractServiceError(
-          'You do not have any tokens to delegate. Please acquire some tokens first',
-          ContractErrorType.INSUFFICIENT_FUNDS
-        );
+      // First check Firebase for delegation data
+      const { getDelegationByDelegator } = await import('./firebaseService');
+      const firebaseDelegation = await getDelegationByDelegator(address);
+      
+      if (firebaseDelegation && firebaseDelegation.active) {
+        result.isDelegating = true;
+        result.delegatedTo = firebaseDelegation.delegatee;
+        logger.debug('Found active delegation in Firebase:', firebaseDelegation);
       }
-    } catch (balanceError) {
-      if (balanceError instanceof ContractServiceError) {
-        throw balanceError;
+      
+      // If not found in Firebase, check on-chain
+      if (!result.isDelegating) {
+        // Try to get voting power via delegates function first
+        if (typeof tokenContractAny.delegates === 'function') {
+          try {
+            const delegatee = await tokenContractAny.delegates(address);
+            
+            // If the address is delegating to someone other than themselves and not the zero address
+            if (delegatee !== ethers.ZeroAddress && delegatee.toLowerCase() !== address.toLowerCase()) {
+              result.isDelegating = true;
+              result.delegatedTo = delegatee;
+            }
+          } catch (delegatesError) {
+            logger.debug('delegates function failed, falling back to alternative method:', delegatesError);
+            // Continue with alternative method
+          }
+        }
       }
-      logger.warn('Error checking token balance:', balanceError);
-      // Continue anyway, the contract will revert if no balance
+      
+      // Get token balance
+      const balance = await tokenContractAny.balanceOf(address);
+      const balanceFormatted = ethers.formatUnits(balance, 18);
+      
+      // Try to get voting power via getVotes if available
+      if (typeof tokenContractAny.getVotes === 'function') {
+        try {
+          const votes = await tokenContractAny.getVotes(address);
+          result.votingPower = ethers.formatUnits(votes, 18);
+        } catch (getVotesError) {
+          logger.debug('getVotes function failed:', getVotesError);
+          
+          // If getVotes fails, we'll use the balance as voting power if not delegating
+          if (!result.isDelegating) {
+            result.votingPower = balanceFormatted;
+          }
+        }
+      } else {
+        // If getVotes doesn't exist, use balance as voting power if not delegating
+        if (!result.isDelegating) {
+          result.votingPower = balanceFormatted;
+        }
+      }
+      
+      logger.debug('Delegation status result:', result);
+      return result;
+    } catch (error) {
+      logger.error('Error in delegation status check:', error);
+      // Return default values but don't throw error to not break the UI
+      return result;
     }
-    
-    const contract = await getSignerContracts().then(contracts => contracts.votingContract);
-    const tx = await (contract as any).delegate(delegateeAddress);
-    await tx.wait();
   } catch (error) {
-    logger.error(`Error delegating votes to ${delegateeAddress}:`, error);
+    logger.error('Error getting delegation status:', error);
     
     if (error instanceof ContractServiceError) {
       throw error;
@@ -685,35 +949,148 @@ export const delegateVotes = async (delegateeAddress: string): Promise<void> => 
   }
 };
 
-// Remove vote delegation
-export const undelegate = async (): Promise<void> => {
+// Delegate votes to another address
+export const delegateVotes = async (delegateeAddress: string): Promise<boolean> => {
   try {
-    const contract = await getSignerContracts().then(contracts => contracts.votingContract);
+    logger.debug('Delegating votes to:', delegateeAddress);
     
-    // Check if the user has delegated votes
-    try {
-      const signer = await getSigner();
-      const userAddress = await signer.getAddress();
-      const { hasDelegated } = await getDelegationStatus(userAddress);
-      
-      if (!hasDelegated) {
-        throw new ContractServiceError(
-          'You have not delegated your votes to anyone',
-          ContractErrorType.CONTRACT_ERROR
-        );
-      }
-    } catch (checkError) {
-      if (checkError instanceof ContractServiceError) {
-        throw checkError;
-      }
-      logger.warn('Error checking delegation status:', checkError);
-      // Continue anyway, the contract will handle validation
+    // Validate delegatee address
+    if (!ethers.isAddress(delegateeAddress)) {
+      throw new ContractServiceError(
+        'Invalid delegatee address format',
+        ContractErrorType.INVALID_ADDRESS
+      );
     }
     
-    const tx = await (contract as any).undelegate();
-    await tx.wait();
+    const { tokenContract, signer } = await getSignerContracts();
+    const tokenContractAny = tokenContract as any;
+    const userAddress = await signer.getAddress();
+    
+    // Prevent self-delegation
+    if (delegateeAddress.toLowerCase() === userAddress.toLowerCase()) {
+      throw new ContractServiceError(
+        'You cannot delegate to yourself',
+        ContractErrorType.CONTRACT_ERROR
+      );
+    }
+    
+    // Check if user has tokens to delegate
+    const balance = await tokenContractAny.balanceOf(userAddress);
+    if (balance <= 0) {
+      throw new ContractServiceError(
+        'You need to have tokens to delegate voting power',
+        ContractErrorType.INSUFFICIENT_FUNDS
+      );
+    }
+    
+    // Import the Firebase service here to avoid circular dependencies
+    const { 
+      saveDelegation, 
+      getDelegationByDelegator,
+      createNotification,
+      NotificationType
+    } = await import('./firebaseService');
+
+    // Check if user already delegated
+    const existingDelegation = await getDelegationByDelegator(userAddress);
+    
+    // Save delegation in Firebase
+    await saveDelegation({
+      delegator: userAddress,
+      delegatee: delegateeAddress,
+      amount: ethers.formatUnits(balance, 18),
+      active: true,
+      timestamp: Date.now()
+    });
+    
+    logger.debug('Delegation saved to database');
+    
+    // Also try to delegate on-chain if the ERC20 token supports it
+    try {
+      if (typeof tokenContractAny.delegate === 'function') {
+        // If the token supports ERC20Votes standard
+        const tx = await tokenContractAny.delegate(delegateeAddress);
+        await tx.wait();
+        logger.debug('On-chain delegation successful');
+      }
+    } catch (contractError) {
+      // This is not critical, as we're primarily using Firebase for delegation
+      logger.warn('On-chain delegation failed (this is okay):', contractError);
+    }
+    
+    // Create notification for the delegatee
+    try {
+      await createNotification({
+        userId: delegateeAddress.toLowerCase(),
+        type: NotificationType.DELEGATION_RECEIVED,
+        title: "Voting Power Received",
+        message: `You have received voting power delegation from ${userAddress}`,
+        linkUrl: "/delegates",
+        read: false,
+        timestamp: Date.now(),
+        data: { delegator: userAddress, amount: ethers.formatUnits(balance, 18) }
+      });
+    } catch (notificationError) {
+      logger.warn('Error creating delegation notification:', notificationError);
+    }
+    
+    return true;
   } catch (error) {
-    logger.error('Error removing delegation:', error);
+    logger.error('Error delegating votes:', error);
+    
+    if (error instanceof ContractServiceError) {
+      throw error;
+    }
+    
+    throw classifyError(error);
+  }
+};
+
+// Undelegate votes (delegate back to yourself)
+export const undelegateVotes = async (): Promise<boolean> => {
+  try {
+    logger.debug('Undelegating votes');
+    
+    const { signer } = await getSignerContracts();
+    const userAddress = await signer.getAddress();
+    
+    // Check current delegation status
+    const { isDelegating } = await getDelegationStatus(userAddress);
+    
+    if (!isDelegating) {
+      throw new ContractServiceError(
+        'You are not currently delegating your votes',
+        ContractErrorType.CONTRACT_ERROR
+      );
+    }
+    
+    // Since our GovernanceToken doesn't implement ERC20Votes, we'll implement
+    // a custom undelegation using Firebase
+
+    // Import the Firebase service here to avoid circular dependencies
+    const { saveDelegation, getDelegationByDelegator } = await import('./firebaseService');
+    
+    // Get the existing delegation
+    const existingDelegation = await getDelegationByDelegator(userAddress);
+    
+    if (existingDelegation) {
+      // Deactivate the delegation
+      await saveDelegation({
+        ...existingDelegation,
+        active: false,
+        timestamp: Date.now()
+      });
+      
+      logger.debug('Delegation removed from database');
+      return true;
+    }
+    
+    throw new ContractServiceError(
+      'No active delegation found',
+      ContractErrorType.CONTRACT_ERROR
+    );
+  } catch (error) {
+    logger.error('Error undelegating votes:', error);
     
     if (error instanceof ContractServiceError) {
       throw error;
@@ -800,37 +1177,6 @@ export const mintTokens = async (receiverAddress: string, amount: string): Promi
   }
 };
 
-// Get user's current delegation status
-export const getDelegationStatus = async (address: string): Promise<{ hasDelegated: boolean, delegatee: string | null }> => {
-  try {
-    if (!ethers.isAddress(address)) {
-      throw new ContractServiceError(
-        'Invalid address format',
-        ContractErrorType.INVALID_ADDRESS
-      );
-    }
-    
-    const contract = await getSignerContracts().then(contracts => contracts.votingContract);
-    const delegatee = await (contract as any).delegates(address);
-    
-    // Check if delegatee is not the zero address
-    const hasDelegated = delegatee !== ethers.ZeroAddress;
-    
-    return {
-      hasDelegated,
-      delegatee: hasDelegated ? delegatee : null
-    };
-  } catch (error) {
-    logger.error('Error getting delegation status:', error);
-    
-    if (error instanceof ContractServiceError) {
-      throw error;
-    }
-    
-    throw classifyError(error);
-  }
-};
-
 // Get voting power for an address
 export const getVotingPower = async (address: string): Promise<string> => {
   try {
@@ -841,9 +1187,20 @@ export const getVotingPower = async (address: string): Promise<string> => {
       );
     }
     
-    const contract = await getSignerContracts().then(contracts => contracts.votingContract);
-    const votingPower = await (contract as any).getVotes(address);
-    return ethers.formatEther(votingPower);
+    const { tokenContract } = await getContracts();
+    const tokenContractAny = tokenContract as any;
+    
+    // First try to get the actual token balance which is more reliable
+    try {
+      const balance = await tokenContractAny.balanceOf(address);
+      return ethers.formatEther(balance);
+    } catch (balanceError) {
+      logger.warn('Error getting balance, falling back to getVotes:', balanceError);
+      
+      // Fall back to getVotes if balanceOf fails
+      const votingPower = await tokenContractAny.getVotes(address);
+      return ethers.formatEther(votingPower);
+    }
   } catch (error) {
     logger.error('Error getting voting power:', error);
     
@@ -987,12 +1344,31 @@ export const getDelegationsToAddress = async (delegateeAddress: string): Promise
     }
     
     logger.debug(`Fetching delegations to address: ${delegateeAddress}`);
-    const { votingContract, provider } = await getContracts();
     
-    // Create a set to store delegator addresses
-    const delegators = new Set<string>();
+    // Create a Map to store unique delegator addresses with their power
+    const delegators = new Map<string, string>();
     
+    // First check Firebase delegations (our custom implementation)
     try {
+      const { getDelegationsToAddress: getFirebaseDelegations } = await import('./firebaseService');
+      const firebaseDelegations = await getFirebaseDelegations(delegateeAddress);
+      
+      logger.debug(`Found ${firebaseDelegations.length} Firebase delegations to ${delegateeAddress}`);
+      
+      // Add Firebase delegations to our Map
+      firebaseDelegations.forEach(delegation => {
+        if (delegation.active) {
+          delegators.set(delegation.delegator.toLowerCase(), delegation.amount);
+        }
+      });
+    } catch (firebaseError) {
+      logger.warn('Error fetching delegations from Firebase:', firebaseError);
+    }
+    
+    // Also check on-chain delegations if available
+    try {
+      const { votingContract, provider } = await getContracts();
+      
       // Look for DelegateChanged events where the target address is the delegatee
       const currentBlock = await provider.getBlockNumber();
       const fromBlock = Math.max(0, currentBlock - 10000); // Look back ~10000 blocks
@@ -1012,7 +1388,7 @@ export const getDelegationsToAddress = async (delegateeAddress: string): Promise
       
       // Query the logs
       const logs = await provider.getLogs(filter);
-      logger.debug(`Found ${logs.length} delegation events to ${delegateeAddress}`);
+      logger.debug(`Found ${logs.length} on-chain delegation events to ${delegateeAddress}`);
       
       // Extract the delegator addresses from the logs
       for (const log of logs) {
@@ -1024,25 +1400,20 @@ export const getDelegationsToAddress = async (delegateeAddress: string): Promise
           
           if (parsedLog && parsedLog.args) {
             // The first parameter is the delegator
-            const delegator = parsedLog.args[0];
+            const delegator = parsedLog.args[0].toLowerCase();
             if (delegator) {
-              delegators.add(delegator);
+              // Only add if we don't already have it from Firebase
+              if (!delegators.has(delegator)) {
+                delegators.set(delegator, '0'); // We'll update the voting power later
+              }
             }
           }
         } catch (error) {
           logger.warn('Error parsing event log:', error);
         }
       }
-      
-      logger.debug(`Extracted ${delegators.size} unique delegator addresses`);
-    } catch (error) {
-      logger.warn('Error fetching delegation events:', error);
-      
-      if (error instanceof ContractServiceError) {
-        throw error;
-      }
-      
-      // Continue with empty set if events couldn't be fetched
+    } catch (onChainError) {
+      logger.warn('Error fetching on-chain delegation events:', onChainError);
     }
     
     // No delegators found
@@ -1050,14 +1421,24 @@ export const getDelegationsToAddress = async (delegateeAddress: string): Promise
       return [];
     }
     
-    // Get token balances for each delegator
-    const delegatorsArray = Array.from(delegators);
+    // Get token balances for each delegator (if we don't already have them)
+    const delegatorsArray = Array.from(delegators.entries());
     const { tokenContract } = await getContracts();
+    const tokenContractAny = tokenContract as any;
     
     const delegatorsWithPower = await Promise.all(
-      delegatorsArray.map(async (address) => {
+      delegatorsArray.map(async ([address, existingPower]) => {
         try {
-          const balance = await tokenContract.balanceOf(address);
+          // If we already have the power from Firebase, use it
+          if (existingPower && parseFloat(existingPower) > 0) {
+            return {
+              address,
+              votingPower: existingPower
+            };
+          }
+          
+          // Otherwise fetch from blockchain
+          const balance = await tokenContractAny.balanceOf(address);
           const tokenBalance = ethers.formatEther(balance);
           
           return {
@@ -1068,7 +1449,7 @@ export const getDelegationsToAddress = async (delegateeAddress: string): Promise
           logger.warn(`Error getting token balance for ${address}:`, error);
           return {
             address,
-            votingPower: '0'
+            votingPower: existingPower || '0'
           };
         }
       })
@@ -1125,3 +1506,120 @@ export async function getDelegateAddress(address: string) {
 }
 
 export { ProposalState };
+
+// Check for proposals with no votes after some time and notify creator
+export const checkProposalsWithNoVotes = async (): Promise<void> => {
+  try {
+    logger.debug('Checking for proposals with no votes');
+    
+    const { votingContract } = await getContracts();
+    const count = await votingContract.getProposalCount();
+    
+    // Import Firebase functions to avoid circular dependencies
+    const { createNoVotesNotification, getProposalFromFirebase } = await import('./firebaseService');
+    
+    // Check all proposals
+    for (let i = 1; i <= count; i++) {
+      try {
+        // Get the proposal state first to filter only active ones
+        const state = await votingContract.state(i);
+        
+        // Only check active proposals
+        if (state === ProposalState.Active) {
+          const proposal = await getProposalFromFirebase(i);
+          
+          if (proposal) {
+            const hasVotes = proposal.forVotes > 0 || proposal.againstVotes > 0 || proposal.abstainVotes > 0;
+            
+            // Calculate time since proposal started
+            const now = Date.now();
+            const startTime = proposal.startTime;
+            const timeElapsed = now - startTime;
+            
+            // If proposal has been active for more than 24 hours with no votes
+            const oneDay = 24 * 60 * 60 * 1000; // 24 hours in milliseconds
+            
+            if (!hasVotes && timeElapsed > oneDay) {
+              logger.debug(`Proposal ${i} has no votes after 24 hours`);
+              
+              // Create notification for the proposal creator
+              await createNoVotesNotification(
+                i,
+                proposal.title,
+                proposal.proposer
+              );
+            }
+          }
+        }
+      } catch (proposalError) {
+        logger.error(`Error checking proposal ${i}:`, proposalError);
+        // Continue with next proposal
+      }
+    }
+    
+    logger.debug('Finished checking proposals with no votes');
+  } catch (error) {
+    logger.error('Error checking proposals with no votes:', error);
+    throw classifyError(error);
+  }
+};
+
+// Withdraw a proposal with no votes
+export const withdrawProposalWithNoVotes = async (proposalId: number): Promise<boolean> => {
+  try {
+    logger.debug(`Withdrawing proposal ${proposalId} with no votes`);
+    
+    // First verify that the proposal has no votes
+    const { votingContract, signer } = await getSignerContracts();
+    const votingContractAny = votingContract as any;
+    const userAddress = await signer.getAddress();
+    
+    // Get proposal details
+    const [
+      title, 
+      description, 
+      forVotes, 
+      againstVotes, 
+      abstainVotes, 
+      startTime, 
+      endTime, 
+      currentState
+    ] = await votingContractAny.getProposal(proposalId);
+    
+    // Check if proposal has any votes
+    const hasVotes = forVotes > 0 || againstVotes > 0 || abstainVotes > 0;
+    
+    if (hasVotes) {
+      throw new ContractServiceError(
+        'Cannot withdraw proposal with votes',
+        ContractErrorType.CONTRACT_ERROR
+      );
+    }
+    
+    // Import Firebase function to get proposer
+    const { getProposalFromFirebase } = await import('./firebaseService');
+    const proposalData = await getProposalFromFirebase(proposalId);
+    
+    // Verify that the current user is the proposer
+    if (proposalData && proposalData.proposer.toLowerCase() !== userAddress.toLowerCase()) {
+      throw new ContractServiceError(
+        'Only the proposer can withdraw their proposal',
+        ContractErrorType.INSUFFICIENT_PERMISSIONS
+      );
+    }
+    
+    // Cancel the proposal
+    await cancelProposal(proposalId);
+    
+    logger.debug(`Successfully withdrew proposal ${proposalId}`);
+    return true;
+  } catch (error) {
+    logger.error(`Error withdrawing proposal ${proposalId}:`, error);
+    
+    if (error instanceof ContractServiceError) {
+      throw error;
+    }
+    
+    throw classifyError(error);
+  }
+};

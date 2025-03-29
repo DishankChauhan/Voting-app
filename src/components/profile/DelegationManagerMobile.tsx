@@ -32,7 +32,7 @@ const truncateAddress = (address: string) => {
   return address.substring(0, 6) + '...' + address.substring(address.length - 4);
 };
 
-const DelegationManager = () => {
+const DelegationManagerMobile = () => {
   const { user } = useAuth();
   const [delegateAddress, setDelegateAddress] = useState('');
   const [delegationStatus, setDelegationStatus] = useState<{
@@ -182,17 +182,17 @@ const DelegationManager = () => {
 
   if (!user?.walletAddress) {
     return (
-      <div className="bg-gray-900 rounded-lg p-6 mb-6">
-        <h2 className="text-xl font-semibold mb-4 text-white">Vote Delegation</h2>
-        <p className="text-gray-400">Please connect your wallet to manage vote delegation.</p>
+      <div className="bg-gray-900 rounded-lg p-4 md:p-6 mb-6 border border-gray-800 shadow-lg">
+        <h2 className="text-lg md:text-xl font-semibold mb-4 text-white">Vote Delegation</h2>
+        <p className="text-gray-400 text-sm md:text-base">Please connect your wallet to manage vote delegation.</p>
       </div>
     );
   }
 
   return (
-    <div className="bg-gray-900 rounded-lg p-6 mb-6">
+    <div className="bg-gray-900 rounded-lg p-4 md:p-6 mb-6 border border-gray-800 shadow-lg">
       <div className="flex justify-between items-center mb-4">
-        <h2 className="text-xl font-semibold text-white">Vote Delegation</h2>
+        <h2 className="text-lg md:text-xl font-semibold text-white">Vote Delegation</h2>
         <button 
           onClick={handleRefresh}
           disabled={refreshing}
@@ -211,14 +211,14 @@ const DelegationManager = () => {
         </div>
       ) : (
         <>
-          <div className="mb-6 bg-gray-800 rounded-lg p-4">
+          <div className="mb-6 bg-gray-800/50 rounded-lg p-4">
             <div className="flex items-center justify-between mb-2">
-              <span className="text-gray-400">Your Voting Power:</span>
+              <span className="text-gray-400 text-sm">Your Voting Power:</span>
               <span className="text-indigo-400 font-medium">{parseFloat(delegationStatus.votingPower).toFixed(2)} votes</span>
             </div>
             
             <div className="flex items-center justify-between">
-              <span className="text-gray-400">Delegation Status:</span>
+              <span className="text-gray-400 text-sm">Delegation Status:</span>
               <span className={`font-medium ${delegationStatus.isDelegating ? 'text-green-400' : 'text-gray-400'}`}>
                 {delegationStatus.isDelegating 
                   ? `Delegated to ${truncateAddress(delegationStatus.delegatedTo)}`
@@ -229,16 +229,16 @@ const DelegationManager = () => {
           
           {delegationStatus.isDelegating ? (
             <div className="mb-6">
-              <p className="text-gray-300 mb-3">
+              <p className="text-gray-300 text-sm mb-3">
                 You are currently delegating your voting power to:
               </p>
-              <div className="flex justify-between items-center p-3 bg-gray-800 rounded-lg mb-4">
-                <span className="font-mono text-indigo-400">{delegationStatus.delegatedTo}</span>
+              <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center p-3 bg-gray-800/50 rounded-lg mb-4">
+                <span className="font-mono text-indigo-400 text-xs break-all mb-2 sm:mb-0">{delegationStatus.delegatedTo}</span>
                 <a 
                   href={`https://etherscan.io/address/${delegationStatus.delegatedTo}`}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="text-xs bg-gray-700 hover:bg-gray-600 text-gray-300 py-1 px-2 rounded transition"
+                  className="text-xs bg-gray-700 hover:bg-gray-600 text-gray-300 py-1 px-2 rounded transition inline-block self-start sm:self-auto"
                 >
                   View on Etherscan
                 </a>
@@ -250,71 +250,65 @@ const DelegationManager = () => {
               >
                 {isProcessing ? (
                   <>
-                    <svg className="animate-spin -ml-1 mr-2 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
                       <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
                       <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                     </svg>
                     Processing...
                   </>
-                ) : (
-                  'Undelegate Votes'
-                )}
+                ) : 'Remove Delegation'}
               </button>
             </div>
           ) : (
-            <form onSubmit={handleDelegate} className="mb-6">
-              <p className="text-gray-300 mb-3">
-                Delegate your voting power to another address. This allows someone else to vote on your behalf without transferring your tokens.
+            <form onSubmit={handleDelegate} className="mb-4">
+              <p className="text-gray-300 text-sm mb-3">
+                Delegate your voting power to another address:
               </p>
               
               <div className="mb-4">
-                <label htmlFor="delegateAddress" className="block text-gray-400 text-sm mb-2">
+                <label htmlFor="delegateAddress" className="block text-gray-400 text-sm mb-1">
                   Delegate Address
                 </label>
-                <input 
+                <input
                   type="text"
                   id="delegateAddress"
-                  placeholder="0x..."
                   value={delegateAddress}
                   onChange={handleAddressChange}
-                  className={`w-full px-4 py-2 rounded bg-gray-800 text-white border ${
+                  placeholder="0x..."
+                  className={`w-full bg-gray-800 border ${
                     addressError ? 'border-red-500' : 'border-gray-700'
-                  } focus:border-indigo-500 focus:ring-2 focus:ring-indigo-900 focus:outline-none`}
+                  } rounded-lg py-2 px-3 text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-indigo-500`}
                 />
                 {addressError && (
-                  <p className="mt-1 text-sm text-red-500">{addressError}</p>
+                  <p className="text-red-500 text-xs mt-1">{addressError}</p>
                 )}
               </div>
               
               <button
                 type="submit"
-                disabled={isProcessing || !!addressError || !delegateAddress}
+                disabled={isProcessing || !!addressError}
                 className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-medium py-2 px-4 rounded transition disabled:opacity-50 disabled:cursor-not-allowed flex justify-center items-center"
               >
                 {isProcessing ? (
                   <>
-                    <svg className="animate-spin -ml-1 mr-2 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
                       <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
                       <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                     </svg>
                     Processing...
                   </>
-                ) : (
-                  'Delegate Votes'
-                )}
+                ) : 'Delegate Votes'}
               </button>
             </form>
           )}
           
-          <div className="border-t border-gray-800 pt-4">
-            <h3 className="text-lg font-medium text-white mb-2">What is Vote Delegation?</h3>
-            <p className="text-gray-400 text-sm mb-3">
-              Vote delegation allows you to designate another address to vote on your behalf without transferring your tokens.
-              It's useful when you want to participate in governance but prefer to let someone else make voting decisions.
+          <div className="border-t border-gray-800 pt-4 mt-4">
+            <p className="text-gray-400 text-xs">
+              <strong className="text-gray-300">Note:</strong> Delegating your votes allows another address to vote on your behalf, but does not transfer your tokens. You can remove the delegation at any time.
             </p>
-            <p className="text-gray-400 text-sm">
-              Your delegated votes can be reclaimed at any time by undelegating.
-            </p>
+            <Link href="/delegates" className="text-indigo-400 hover:text-indigo-300 text-xs mt-2 inline-block">
+              View recommended delegates
+            </Link>
           </div>
         </>
       )}
@@ -322,4 +316,4 @@ const DelegationManager = () => {
   );
 };
 
-export default DelegationManager; 
+export default DelegationManagerMobile; 

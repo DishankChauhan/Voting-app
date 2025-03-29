@@ -127,13 +127,11 @@ export interface ProposalData {
   endTime: number;
   executed: boolean;
   canceled: boolean;
-  // Additional metadata stored in Firebase
-  metadata?: {
-    createdAt: Date;
-    comments?: Array<{
-      user: string;
-      text: string;
-      timestamp: Date;
-    }>;
-  };
+  metadata?: Record<string, any>;
+  votes?: Array<{
+    voter: string;
+    support: number;
+    weight: number;
+    timestamp: number;
+  }>;
 } 
